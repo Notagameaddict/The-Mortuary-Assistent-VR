@@ -290,3 +290,74 @@ int __cdecl MAVR_GetCapturedD3D11DeviceInfo(
 
     return 0;
 }
+
+
+extern "C" __declspec(dllexport) int __cdecl
+MAVR_ClearD3D11Texture(
+    void* texturePointer,
+    float red,
+    float green,
+    float blue,
+    float alpha)
+{
+    if (texturePointer == nullptr)
+    {
+        return 1;
+    }
+
+    ID3D11Texture2D* texture =
+        reinterpret_cast<ID3D11Texture2D*>(texturePointer);
+
+    ID3D11Device* device = nullptr;
+    texture->GetDevice(&device);
+
+    if (device == nullptr)
+    {
+        return 2;
+    }
+
+    ID3D11DeviceContext* context = nullptr;
+    device->GetImmediateContext(&context);
+
+    if (context == nullptr)
+    {
+        device->Release();
+        return 3;
+    }
+
+    ID3D11RenderTargetView* renderTargetView = nullptr;
+
+    const HRESULT viewResult =
+        device->CreateRenderTargetView(
+            texture,
+            nullptr,
+            &renderTargetView);
+
+    if (FAILED(viewResult) ||
+        renderTargetView == nullptr)
+    {
+        context->Release();
+        device->Release();
+        return 4;
+    }
+
+    const float color[4] =
+    {
+        red,
+        green,
+        blue,
+        alpha
+    };
+
+    context->ClearRenderTargetView(
+        renderTargetView,
+        color);
+
+    context->Flush();
+
+    renderTargetView->Release();
+    context->Release();
+    device->Release();
+
+    return 0;
+}

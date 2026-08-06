@@ -8,13 +8,57 @@ namespace MortuaryAssistantVR.XR;
 internal sealed class OpenXrNativeBackend : IXrBackend
 {
     private const int XrSuccess = 0;
+    private const int XrEventUnavailable = 4;
 
     private const int XrTypeInstanceCreateInfo = 3;
+    private const int XrTypeViewLocateInfo = 6;
+    private const int XrTypeView = 7;
     private const int XrTypeSystemGetInfo = 4;
+    private const int XrTypeSessionCreateInfo = 8;
+    private const int XrTypeSwapchainCreateInfo = 9;
+    private const int XrTypeSessionBeginInfo = 10;
+    private const int XrTypeViewState = 11;
+    private const int XrTypeFrameEndInfo = 12;
+    private const int XrTypeEventDataBuffer = 16;
+    private const int XrTypeEventDataSessionStateChanged = 18;
+    private const int XrTypeFrameWaitInfo = 33;
+    private const int XrTypeCompositionLayerProjection = 35;
+    private const int XrTypeReferenceSpaceCreateInfo = 37;
+    private const int XrTypeViewConfigurationView = 41;
+    private const int XrTypeFrameState = 44;
+    private const int XrTypeFrameBeginInfo = 46;
+    private const int XrTypeCompositionLayerProjectionView = 48;
+    private const int XrTypeSwapchainImageAcquireInfo = 55;
+    private const int XrTypeSwapchainImageWaitInfo = 56;
+    private const int XrTypeSwapchainImageReleaseInfo = 57;
+    private const int XrTypeGraphicsBindingD3D11Khr = 1000027000;
+    private const int XrTypeSwapchainImageD3D11Khr = 1000027001;
     private const int XrTypeGraphicsRequirementsD3D11Khr = 1000027002;
 
     private const int XrFormFactorHeadMountedDisplay = 1;
+    private const int XrViewConfigurationTypePrimaryStereo = 2;
+    private const int XrReferenceSpaceTypeLocal = 2;
+    private const int XrEnvironmentBlendModeOpaque = 1;
 
+    private const ulong XrSwapchainUsageColorAttachmentBit = 0x00000001;
+    private const ulong XrSwapchainUsageSampledBit = 0x00000020;
+
+    private const long DxgiFormatR8G8B8A8Unorm = 28;
+    private const long DxgiFormatR8G8B8A8UnormSrgb = 29;
+    private const long DxgiFormatB8G8R8A8Unorm = 87;
+    private const long DxgiFormatB8G8R8A8UnormSrgb = 91;
+
+    private const int XrSessionStateUnknown = 0;
+    private const int XrSessionStateIdle = 1;
+    private const int XrSessionStateReady = 2;
+    private const int XrSessionStateSynchronized = 3;
+    private const int XrSessionStateVisible = 4;
+    private const int XrSessionStateFocused = 5;
+    private const int XrSessionStateStopping = 6;
+    private const int XrSessionStateLossPending = 7;
+    private const int XrSessionStateExiting = 8;
+
+    private const int XrMaxEventDataSize = 4000;
     private const int XrMaxApplicationNameSize = 128;
     private const int XrMaxEngineNameSize = 128;
 
@@ -30,13 +74,49 @@ internal sealed class OpenXrNativeBackend : IXrBackend
     private XrCreateInstanceDelegate? _xrCreateInstance;
     private XrDestroyInstanceDelegate? _xrDestroyInstance;
     private XrGetSystemDelegate? _xrGetSystem;
+    private XrCreateSessionDelegate? _xrCreateSession;
+    private XrDestroySessionDelegate? _xrDestroySession;
+    private XrPollEventDelegate? _xrPollEvent;
+    private XrBeginSessionDelegate? _xrBeginSession;
+    private XrEndSessionDelegate? _xrEndSession;
+    private XrCreateReferenceSpaceDelegate? _xrCreateReferenceSpace;
+    private XrDestroySpaceDelegate? _xrDestroySpace;
+    private XrWaitFrameDelegate? _xrWaitFrame;
+    private XrBeginFrameDelegate? _xrBeginFrame;
+    private XrEndFrameDelegate? _xrEndFrame;
+    private XrEnumerateViewConfigurationViewsDelegate?
+        _xrEnumerateViewConfigurationViews;
+    private XrEnumerateSwapchainFormatsDelegate?
+        _xrEnumerateSwapchainFormats;
+    private XrCreateSwapchainDelegate? _xrCreateSwapchain;
+    private XrDestroySwapchainDelegate? _xrDestroySwapchain;
+    private XrEnumerateSwapchainImagesDelegate?
+        _xrEnumerateSwapchainImages;
+    private XrAcquireSwapchainImageDelegate?
+        _xrAcquireSwapchainImage;
+    private XrWaitSwapchainImageDelegate?
+        _xrWaitSwapchainImage;
+    private XrReleaseSwapchainImageDelegate?
+        _xrReleaseSwapchainImage;
+    private XrLocateViewsDelegate? _xrLocateViews;
     private XrGetD3D11GraphicsRequirementsKhrDelegate?
         _xrGetD3D11GraphicsRequirementsKhr;
 
     private ulong _instance;
     private ulong _systemId;
+    private ulong _session;
+    private ulong _localSpace;
+    private readonly List<ulong> _colorSwapchains = new();
+    private readonly List<OpenXrSwapchainImageSet> _swapchainImageSets = new();
+    private readonly List<XrViewConfigurationView> _viewConfigurationViews = new();
+    private long _colorSwapchainFormat;
     private XrGraphicsRequirementsD3D11Khr _graphicsRequirements;
     private bool _disposed;
+    private bool _sessionRunning;
+    private bool _exitRequested;
+    private int _sessionState = XrSessionStateUnknown;
+    private int _presentHookPollCount;
+    private int _frameCount;
 
     internal OpenXrNativeBackend(ManualLogSource logger)
     {
@@ -299,6 +379,234 @@ internal sealed class OpenXrNativeBackend : IXrBackend
                 getSystemAddress);
 
         if (!TryResolveInstanceFunction(
+                "xrCreateSession",
+                out var createSessionAddress))
+        {
+            return false;
+        }
+
+        _xrCreateSession =
+            Marshal.GetDelegateForFunctionPointer<
+                XrCreateSessionDelegate>(
+                createSessionAddress);
+
+        if (!TryResolveInstanceFunction(
+                "xrDestroySession",
+                out var destroySessionAddress))
+        {
+            return false;
+        }
+
+        _xrDestroySession =
+            Marshal.GetDelegateForFunctionPointer<
+                XrDestroySessionDelegate>(
+                destroySessionAddress);
+
+        if (!TryResolveInstanceFunction(
+                "xrPollEvent",
+                out var pollEventAddress))
+        {
+            return false;
+        }
+
+        _xrPollEvent =
+            Marshal.GetDelegateForFunctionPointer<
+                XrPollEventDelegate>(
+                pollEventAddress);
+
+        if (!TryResolveInstanceFunction(
+                "xrBeginSession",
+                out var beginSessionAddress))
+        {
+            return false;
+        }
+
+        _xrBeginSession =
+            Marshal.GetDelegateForFunctionPointer<
+                XrBeginSessionDelegate>(
+                beginSessionAddress);
+
+        if (!TryResolveInstanceFunction(
+                "xrEndSession",
+                out var endSessionAddress))
+        {
+            return false;
+        }
+
+        _xrEndSession =
+            Marshal.GetDelegateForFunctionPointer<
+                XrEndSessionDelegate>(
+                endSessionAddress);
+
+        if (!TryResolveInstanceFunction(
+                "xrCreateReferenceSpace",
+                out var createReferenceSpaceAddress))
+        {
+            return false;
+        }
+
+        _xrCreateReferenceSpace =
+            Marshal.GetDelegateForFunctionPointer<
+                XrCreateReferenceSpaceDelegate>(
+                createReferenceSpaceAddress);
+
+        if (!TryResolveInstanceFunction(
+                "xrDestroySpace",
+                out var destroySpaceAddress))
+        {
+            return false;
+        }
+
+        _xrDestroySpace =
+            Marshal.GetDelegateForFunctionPointer<
+                XrDestroySpaceDelegate>(
+                destroySpaceAddress);
+
+        if (!TryResolveInstanceFunction(
+                "xrWaitFrame",
+                out var waitFrameAddress))
+        {
+            return false;
+        }
+
+        _xrWaitFrame =
+            Marshal.GetDelegateForFunctionPointer<
+                XrWaitFrameDelegate>(
+                waitFrameAddress);
+
+        if (!TryResolveInstanceFunction(
+                "xrBeginFrame",
+                out var beginFrameAddress))
+        {
+            return false;
+        }
+
+        _xrBeginFrame =
+            Marshal.GetDelegateForFunctionPointer<
+                XrBeginFrameDelegate>(
+                beginFrameAddress);
+
+        if (!TryResolveInstanceFunction(
+                "xrEndFrame",
+                out var endFrameAddress))
+        {
+            return false;
+        }
+
+        _xrEndFrame =
+            Marshal.GetDelegateForFunctionPointer<
+                XrEndFrameDelegate>(
+                endFrameAddress);
+
+        if (!TryResolveInstanceFunction(
+                "xrEnumerateViewConfigurationViews",
+                out var enumerateViewsAddress))
+        {
+            return false;
+        }
+
+        _xrEnumerateViewConfigurationViews =
+            Marshal.GetDelegateForFunctionPointer<
+                XrEnumerateViewConfigurationViewsDelegate>(
+                enumerateViewsAddress);
+
+        if (!TryResolveInstanceFunction(
+                "xrEnumerateSwapchainFormats",
+                out var enumerateFormatsAddress))
+        {
+            return false;
+        }
+
+        _xrEnumerateSwapchainFormats =
+            Marshal.GetDelegateForFunctionPointer<
+                XrEnumerateSwapchainFormatsDelegate>(
+                enumerateFormatsAddress);
+
+        if (!TryResolveInstanceFunction(
+                "xrCreateSwapchain",
+                out var createSwapchainAddress))
+        {
+            return false;
+        }
+
+        _xrCreateSwapchain =
+            Marshal.GetDelegateForFunctionPointer<
+                XrCreateSwapchainDelegate>(
+                createSwapchainAddress);
+
+        if (!TryResolveInstanceFunction(
+                "xrDestroySwapchain",
+                out var destroySwapchainAddress))
+        {
+            return false;
+        }
+
+        _xrDestroySwapchain =
+            Marshal.GetDelegateForFunctionPointer<
+                XrDestroySwapchainDelegate>(
+                destroySwapchainAddress);
+
+        if (!TryResolveInstanceFunction(
+                "xrEnumerateSwapchainImages",
+                out var enumerateSwapchainImagesAddress))
+        {
+            return false;
+        }
+
+        _xrEnumerateSwapchainImages =
+            Marshal.GetDelegateForFunctionPointer<
+                XrEnumerateSwapchainImagesDelegate>(
+                enumerateSwapchainImagesAddress);
+
+        if (!TryResolveInstanceFunction(
+                "xrAcquireSwapchainImage",
+                out var acquireSwapchainImageAddress))
+        {
+            return false;
+        }
+
+        _xrAcquireSwapchainImage =
+            Marshal.GetDelegateForFunctionPointer<
+                XrAcquireSwapchainImageDelegate>(
+                acquireSwapchainImageAddress);
+
+        if (!TryResolveInstanceFunction(
+                "xrWaitSwapchainImage",
+                out var waitSwapchainImageAddress))
+        {
+            return false;
+        }
+
+        _xrWaitSwapchainImage =
+            Marshal.GetDelegateForFunctionPointer<
+                XrWaitSwapchainImageDelegate>(
+                waitSwapchainImageAddress);
+
+        if (!TryResolveInstanceFunction(
+                "xrReleaseSwapchainImage",
+                out var releaseSwapchainImageAddress))
+        {
+            return false;
+        }
+
+        _xrReleaseSwapchainImage =
+            Marshal.GetDelegateForFunctionPointer<
+                XrReleaseSwapchainImageDelegate>(
+                releaseSwapchainImageAddress);
+
+        if (!TryResolveInstanceFunction(
+                "xrLocateViews",
+                out var locateViewsAddress))
+        {
+            return false;
+        }
+
+        _xrLocateViews =
+            Marshal.GetDelegateForFunctionPointer<
+                XrLocateViewsDelegate>(
+                locateViewsAddress);
+
+        if (!TryResolveInstanceFunction(
                 "xrGetD3D11GraphicsRequirementsKHR",
                 out var graphicsRequirementsAddress))
         {
@@ -455,22 +763,81 @@ internal sealed class OpenXrNativeBackend : IXrBackend
         _logger.LogInfo(
             $"[XRBackend] {StatusMessage}");
 
-        return ValidateUnityD3D11Device();
+        return InstallPresentHookProbe();
     }
 
     [HideFromIl2Cpp]
-    private bool ValidateUnityD3D11Device()
+    private bool InstallPresentHookProbe()
     {
         _logger.LogInfo(
-            "[XRBackend] Querying Unity's active D3D11 device " +
-            "through the native bridge.");
+            "[XRBackend] Installing D3D11 Present-hook probe.");
 
-        if (!UnityD3D11Bridge.TryGetDeviceInfo(
-                _logger,
-                out var deviceInfo))
+        if (!D3D11PresentHookProbe.Install(_logger))
         {
             return Fail(
-                "Unity D3D11 bridge could not provide the active device.");
+                "The D3D11 Present-hook probe could not be installed.");
+        }
+
+        State =
+            XrBackendState.WaitingForUnityGraphicsDevice;
+
+        StatusMessage =
+            "D3D11 Present hook installed; waiting for Unity's " +
+            "first presented frame.";
+
+        _logger.LogInfo(
+            $"[XRBackend] {StatusMessage}");
+
+        return true;
+    }
+
+    [HideFromIl2Cpp]
+    internal void PollUnityGraphicsDevice()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (State == XrBackendState.WaitingForUnityGraphicsDevice)
+        {
+            PollForUnityGraphicsDevice();
+        }
+
+        if (_session != 0)
+        {
+            PollOpenXrEvents();
+
+            if (_sessionRunning &&
+                !_exitRequested)
+            {
+                RunEmptyFrame();
+            }
+        }
+    }
+
+    [HideFromIl2Cpp]
+    private void PollForUnityGraphicsDevice()
+    {
+        _presentHookPollCount++;
+
+        var shouldLogAttempt =
+            _presentHookPollCount <= 5 ||
+            _presentHookPollCount % 120 == 0;
+
+        if (shouldLogAttempt)
+        {
+            _logger.LogInfo(
+                $"[XRBackend] Present-hook poll attempt " +
+                $"{_presentHookPollCount}.");
+        }
+
+        if (!D3D11PresentHookProbe.TryGetDevice(
+                _logger,
+                out var deviceInfo,
+                shouldLogAttempt))
+        {
+            return;
         }
 
         var runtimeLuid =
@@ -488,12 +855,6 @@ internal sealed class OpenXrNativeBackend : IXrBackend
                         deviceInfo.AdapterLuidHighPart
                 });
 
-        var runtimeFeatureLevel =
-            _graphicsRequirements.MinFeatureLevel;
-
-        var unityFeatureLevel =
-            deviceInfo.FeatureLevel;
-
         var adapterMatches =
             _graphicsRequirements.AdapterLuid.LowPart ==
                 deviceInfo.AdapterLuidLowPart &&
@@ -501,17 +862,18 @@ internal sealed class OpenXrNativeBackend : IXrBackend
                 deviceInfo.AdapterLuidHighPart;
 
         var featureLevelMatches =
-            unityFeatureLevel >= runtimeFeatureLevel;
+            deviceInfo.FeatureLevel >=
+                _graphicsRequirements.MinFeatureLevel;
 
         _logger.LogInfo(
-            $"[XRBackend] Unity D3D11 device=0x" +
+            $"[XRBackend] Captured Unity D3D11 device=0x" +
             $"{deviceInfo.DevicePointer.ToInt64():X}, " +
             $"adapterLuid={unityLuid}, " +
             $"featureLevel=" +
-            $"{FormatD3DFeatureLevel(unityFeatureLevel)}");
+            $"{FormatD3DFeatureLevel(deviceInfo.FeatureLevel)}");
 
         _logger.LogInfo(
-            $"[XRBackend] D3D11 comparison: " +
+            $"[XRBackend] Present-hook comparison: " +
             $"adapterMatches={adapterMatches}, " +
             $"featureLevelMatches={featureLevelMatches}, " +
             $"runtimeAdapter={runtimeLuid}, " +
@@ -519,29 +881,1552 @@ internal sealed class OpenXrNativeBackend : IXrBackend
 
         if (!adapterMatches)
         {
-            return Fail(
-                "Unity is rendering on a different GPU adapter " +
-                "than the OpenXR runtime requires.");
+            Fail(
+                "The captured Unity D3D11 device uses a different " +
+                "GPU adapter than OpenXR requires.");
+
+            return;
         }
 
         if (!featureLevelMatches)
         {
-            return Fail(
-                "Unity's D3D11 feature level is below the " +
-                "minimum required by the OpenXR runtime.");
+            Fail(
+                "The captured Unity D3D11 device feature level is " +
+                "below the OpenXR runtime requirement.");
+
+            return;
         }
 
         State =
             XrBackendState.UnityGraphicsDeviceReady;
 
         StatusMessage =
-            "Unity's active D3D11 device matches the " +
-            "OpenXR graphics requirements.";
+            "Unity's captured D3D11 device matches the OpenXR " +
+            "graphics requirements.";
+
+        _logger.LogInfo(
+            $"[XRBackend] {StatusMessage}");
+
+        CreateSession(
+            deviceInfo.DevicePointer);
+    }
+
+    [HideFromIl2Cpp]
+    private bool CreateSession(
+        IntPtr d3d11Device)
+    {
+        if (_xrCreateSession is null)
+        {
+            return Fail(
+                "xrCreateSession delegate is unavailable.");
+        }
+
+        if (d3d11Device == IntPtr.Zero)
+        {
+            return Fail(
+                "Cannot create an OpenXR session with a null " +
+                "D3D11 device pointer.");
+        }
+
+        var binding =
+            new XrGraphicsBindingD3D11Khr
+            {
+                Type =
+                    XrTypeGraphicsBindingD3D11Khr,
+
+                Next =
+                    IntPtr.Zero,
+
+                Device =
+                    d3d11Device
+            };
+
+        var bindingPointer =
+            Marshal.AllocHGlobal(
+                Marshal.SizeOf<XrGraphicsBindingD3D11Khr>());
+
+        try
+        {
+            Marshal.StructureToPtr(
+                binding,
+                bindingPointer,
+                false);
+
+            var createInfo =
+                new XrSessionCreateInfo
+                {
+                    Type =
+                        XrTypeSessionCreateInfo,
+
+                    Next =
+                        bindingPointer,
+
+                    CreateFlags =
+                        0,
+
+                    SystemId =
+                        _systemId
+                };
+
+            _logger.LogInfo(
+                "[XRBackend] Calling xrCreateSession with " +
+                $"D3D11 device=0x{d3d11Device.ToInt64():X}.");
+
+            var result =
+                _xrCreateSession(
+                    _instance,
+                    ref createInfo,
+                    out _session);
+
+            _logger.LogInfo(
+                $"[XRBackend] xrCreateSession result={result}, " +
+                $"session=0x{_session:X}.");
+
+            if (result != XrSuccess ||
+                _session == 0)
+            {
+                State =
+                    XrBackendState.SessionCreationFailed;
+
+                StatusMessage =
+                    $"xrCreateSession failed with XrResult {result}.";
+
+                _session = 0;
+                return false;
+            }
+
+            State =
+                XrBackendState.SessionCreated;
+
+            StatusMessage =
+                "OpenXR D3D11 session created successfully.";
+
+            _logger.LogInfo(
+                $"[XRBackend] {StatusMessage}");
+
+            if (!CreateLocalReferenceSpace())
+            {
+                return false;
+            }
+
+            if (!CreateStereoColorSwapchains())
+            {
+                return false;
+            }
+
+            State =
+                XrBackendState.WaitingForSessionReady;
+
+            StatusMessage =
+                "OpenXR session and LOCAL reference space are ready; " +
+                "waiting for XR_SESSION_STATE_READY.";
+
+            _logger.LogInfo(
+                $"[XRBackend] {StatusMessage}");
+
+            return true;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(
+                bindingPointer);
+        }
+    }
+
+    [HideFromIl2Cpp]
+    private bool CreateLocalReferenceSpace()
+    {
+        if (_xrCreateReferenceSpace is null)
+        {
+            return Fail(
+                "xrCreateReferenceSpace delegate is unavailable.");
+        }
+
+        var createInfo =
+            new XrReferenceSpaceCreateInfo
+            {
+                Type =
+                    XrTypeReferenceSpaceCreateInfo,
+
+                Next =
+                    IntPtr.Zero,
+
+                ReferenceSpaceType =
+                    XrReferenceSpaceTypeLocal,
+
+                PoseInReferenceSpace =
+                    XrPosef.Identity
+            };
+
+        _logger.LogInfo(
+            "[XRBackend] Calling xrCreateReferenceSpace " +
+            "for XR_REFERENCE_SPACE_TYPE_LOCAL.");
+
+        var result =
+            _xrCreateReferenceSpace(
+                _session,
+                ref createInfo,
+                out _localSpace);
+
+        _logger.LogInfo(
+            $"[XRBackend] xrCreateReferenceSpace result={result}, " +
+            $"space=0x{_localSpace:X}.");
+
+        if (result != XrSuccess ||
+            _localSpace == 0)
+        {
+            _localSpace = 0;
+
+            return Fail(
+                $"xrCreateReferenceSpace failed with XrResult {result}.");
+        }
+
+        State =
+            XrBackendState.ReferenceSpaceCreated;
+
+        StatusMessage =
+            "OpenXR LOCAL reference space created successfully.";
+
+        return true;
+    }
+
+    [HideFromIl2Cpp]
+    private bool CreateStereoColorSwapchains()
+    {
+        if (_xrEnumerateViewConfigurationViews is null ||
+            _xrEnumerateSwapchainFormats is null ||
+            _xrCreateSwapchain is null)
+        {
+            return Fail(
+                "OpenXR swapchain delegates are unavailable.");
+        }
+
+        var countResult =
+            _xrEnumerateViewConfigurationViews(
+                _instance,
+                _systemId,
+                XrViewConfigurationTypePrimaryStereo,
+                0,
+                out var viewCount,
+                IntPtr.Zero);
+
+        _logger.LogInfo(
+            $"[XRBackend] View configuration count result={countResult}, " +
+            $"count={viewCount}.");
+
+        if (countResult != XrSuccess ||
+            viewCount == 0)
+        {
+            return Fail(
+                "Could not enumerate PRIMARY_STEREO view configuration.");
+        }
+
+        var viewSize =
+            Marshal.SizeOf<XrViewConfigurationView>();
+
+        var viewsPointer =
+            Marshal.AllocHGlobal(
+                checked((int)viewCount * viewSize));
+
+        try
+        {
+            for (var index = 0;
+                 index < viewCount;
+                 index++)
+            {
+                var view =
+                    new XrViewConfigurationView
+                    {
+                        Type =
+                            XrTypeViewConfigurationView,
+
+                        Next =
+                            IntPtr.Zero
+                    };
+
+                Marshal.StructureToPtr(
+                    view,
+                    IntPtr.Add(
+                        viewsPointer,
+                        index * viewSize),
+                    false);
+            }
+
+            var viewsResult =
+                _xrEnumerateViewConfigurationViews(
+                    _instance,
+                    _systemId,
+                    XrViewConfigurationTypePrimaryStereo,
+                    viewCount,
+                    out var writtenViewCount,
+                    viewsPointer);
+
+            _logger.LogInfo(
+                $"[XRBackend] View configuration query result={viewsResult}, " +
+                $"written={writtenViewCount}.");
+
+            if (viewsResult != XrSuccess ||
+                writtenViewCount != viewCount)
+            {
+                return Fail(
+                    "OpenXR did not return the expected stereo views.");
+            }
+
+            _viewConfigurationViews.Clear();
+
+            for (var index = 0;
+                 index < writtenViewCount;
+                 index++)
+            {
+                var view =
+                    Marshal.PtrToStructure<XrViewConfigurationView>(
+                        IntPtr.Add(
+                            viewsPointer,
+                            index * viewSize));
+
+                _viewConfigurationViews.Add(
+                    view);
+
+                _logger.LogInfo(
+                    $"[XRBackend] View[{index}]: " +
+                    $"recommended={view.RecommendedImageRectWidth}x" +
+                    $"{view.RecommendedImageRectHeight}, " +
+                    $"max={view.MaxImageRectWidth}x" +
+                    $"{view.MaxImageRectHeight}, " +
+                    $"samples={view.RecommendedSwapchainSampleCount}.");
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(
+                viewsPointer);
+        }
+
+        if (!ChooseSwapchainFormat())
+        {
+            return false;
+        }
+
+        DestroyColorSwapchains();
+
+        for (var viewIndex = 0;
+             viewIndex < _viewConfigurationViews.Count;
+             viewIndex++)
+        {
+            var view =
+                _viewConfigurationViews[viewIndex];
+
+            var createInfo =
+                new XrSwapchainCreateInfo
+                {
+                    Type =
+                        XrTypeSwapchainCreateInfo,
+
+                    Next =
+                        IntPtr.Zero,
+
+                    CreateFlags =
+                        0,
+
+                    UsageFlags =
+                        XrSwapchainUsageColorAttachmentBit |
+                        XrSwapchainUsageSampledBit,
+
+                    Format =
+                        _colorSwapchainFormat,
+
+                    SampleCount =
+                        Math.Max(
+                            1u,
+                            view.RecommendedSwapchainSampleCount),
+
+                    Width =
+                        view.RecommendedImageRectWidth,
+
+                    Height =
+                        view.RecommendedImageRectHeight,
+
+                    FaceCount =
+                        1,
+
+                    ArraySize =
+                        1,
+
+                    MipCount =
+                        1
+                };
+
+            var result =
+                _xrCreateSwapchain(
+                    _session,
+                    ref createInfo,
+                    out var swapchain);
+
+            _logger.LogInfo(
+                $"[XRBackend] xrCreateSwapchain view={viewIndex}, " +
+                $"result={result}, swapchain=0x{swapchain:X}, " +
+                $"size={createInfo.Width}x{createInfo.Height}, " +
+                $"format={createInfo.Format}.");
+
+            if (result != XrSuccess ||
+                swapchain == 0)
+            {
+                DestroyColorSwapchains();
+
+                return Fail(
+                    $"xrCreateSwapchain failed for view {viewIndex} " +
+                    $"with XrResult {result}.");
+            }
+
+            _colorSwapchains.Add(
+                swapchain);
+
+            if (!EnumerateSwapchainImages(
+                    viewIndex,
+                    swapchain,
+                    createInfo.Width,
+                    createInfo.Height,
+                    createInfo.Format))
+            {
+                DestroyColorSwapchains();
+                return false;
+            }
+        }
+
+        State =
+            XrBackendState.SwapchainImagesReady;
+
+        StatusMessage =
+            $"Created {_colorSwapchains.Count} OpenXR color swapchains " +
+            $"and enumerated {_swapchainImageSets.Sum(set => set.Textures.Count)} " +
+            $"D3D11 textures using DXGI format {_colorSwapchainFormat}.";
 
         _logger.LogInfo(
             $"[XRBackend] {StatusMessage}");
 
         return true;
+    }
+
+    [HideFromIl2Cpp]
+    private bool EnumerateSwapchainImages(
+        int viewIndex,
+        ulong swapchain,
+        uint width,
+        uint height,
+        long format)
+    {
+        if (_xrEnumerateSwapchainImages is null)
+        {
+            return Fail(
+                "xrEnumerateSwapchainImages delegate is unavailable.");
+        }
+
+        var countResult =
+            _xrEnumerateSwapchainImages(
+                swapchain,
+                0,
+                out var imageCount,
+                IntPtr.Zero);
+
+        _logger.LogInfo(
+            $"[XRBackend] Swapchain image count view={viewIndex}, " +
+            $"result={countResult}, count={imageCount}.");
+
+        if (countResult != XrSuccess ||
+            imageCount == 0)
+        {
+            return Fail(
+                $"Could not query swapchain images for view {viewIndex}.");
+        }
+
+        var imageSize =
+            Marshal.SizeOf<XrSwapchainImageD3D11Khr>();
+
+        var imagesPointer =
+            Marshal.AllocHGlobal(
+                checked((int)imageCount * imageSize));
+
+        try
+        {
+            for (var imageIndex = 0;
+                 imageIndex < imageCount;
+                 imageIndex++)
+            {
+                var image =
+                    new XrSwapchainImageD3D11Khr
+                    {
+                        Type =
+                            XrTypeSwapchainImageD3D11Khr,
+
+                        Next =
+                            IntPtr.Zero,
+
+                        Texture =
+                            IntPtr.Zero
+                    };
+
+                Marshal.StructureToPtr(
+                    image,
+                    IntPtr.Add(
+                        imagesPointer,
+                        imageIndex * imageSize),
+                    false);
+            }
+
+            var imagesResult =
+                _xrEnumerateSwapchainImages(
+                    swapchain,
+                    imageCount,
+                    out var writtenImageCount,
+                    imagesPointer);
+
+            _logger.LogInfo(
+                $"[XRBackend] Swapchain image query view={viewIndex}, " +
+                $"result={imagesResult}, written={writtenImageCount}.");
+
+            if (imagesResult != XrSuccess ||
+                writtenImageCount != imageCount)
+            {
+                return Fail(
+                    $"OpenXR did not return the expected swapchain images " +
+                    $"for view {viewIndex}.");
+            }
+
+            var textures =
+                new List<IntPtr>(
+                    checked((int)writtenImageCount));
+
+            for (var imageIndex = 0;
+                 imageIndex < writtenImageCount;
+                 imageIndex++)
+            {
+                var image =
+                    Marshal.PtrToStructure<XrSwapchainImageD3D11Khr>(
+                        IntPtr.Add(
+                            imagesPointer,
+                            imageIndex * imageSize));
+
+                if (image.Texture == IntPtr.Zero)
+                {
+                    return Fail(
+                        $"Swapchain texture {imageIndex} for view " +
+                        $"{viewIndex} is null.");
+                }
+
+                textures.Add(
+                    image.Texture);
+
+                _logger.LogInfo(
+                    $"[XRBackend] Swapchain image view={viewIndex}, " +
+                    $"index={imageIndex}, " +
+                    $"texture=0x{image.Texture.ToInt64():X}.");
+            }
+
+            _swapchainImageSets.Add(
+                new OpenXrSwapchainImageSet(
+                    viewIndex,
+                    swapchain,
+                    width,
+                    height,
+                    format,
+                    textures));
+
+            return true;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(
+                imagesPointer);
+        }
+    }
+
+    [HideFromIl2Cpp]
+    private bool ChooseSwapchainFormat()
+    {
+        if (_xrEnumerateSwapchainFormats is null)
+        {
+            return Fail(
+                "xrEnumerateSwapchainFormats delegate is unavailable.");
+        }
+
+        var countResult =
+            _xrEnumerateSwapchainFormats(
+                _session,
+                0,
+                out var formatCount,
+                IntPtr.Zero);
+
+        _logger.LogInfo(
+            $"[XRBackend] Swapchain format count result={countResult}, " +
+            $"count={formatCount}.");
+
+        if (countResult != XrSuccess ||
+            formatCount == 0)
+        {
+            return Fail(
+                "OpenXR returned no swapchain formats.");
+        }
+
+        var formatsPointer =
+            Marshal.AllocHGlobal(
+                checked((int)formatCount * sizeof(long)));
+
+        try
+        {
+            var formatsResult =
+                _xrEnumerateSwapchainFormats(
+                    _session,
+                    formatCount,
+                    out var writtenFormatCount,
+                    formatsPointer);
+
+            if (formatsResult != XrSuccess ||
+                writtenFormatCount == 0)
+            {
+                return Fail(
+                    "Could not enumerate OpenXR swapchain formats.");
+            }
+
+            var formats =
+                new long[writtenFormatCount];
+
+            Marshal.Copy(
+                formatsPointer,
+                formats,
+                0,
+                checked((int)writtenFormatCount));
+
+            _logger.LogInfo(
+                $"[XRBackend] Supported swapchain formats: " +
+                $"{string.Join(", ", formats)}.");
+
+            var preferred =
+                new[]
+                {
+                    DxgiFormatR8G8B8A8UnormSrgb,
+                    DxgiFormatB8G8R8A8UnormSrgb,
+                    DxgiFormatR8G8B8A8Unorm,
+                    DxgiFormatB8G8R8A8Unorm
+                };
+
+            foreach (var candidate in preferred)
+            {
+                if (Array.IndexOf(
+                        formats,
+                        candidate) >= 0)
+                {
+                    _colorSwapchainFormat =
+                        candidate;
+
+                    _logger.LogInfo(
+                        $"[XRBackend] Selected swapchain format " +
+                        $"{_colorSwapchainFormat}.");
+
+                    return true;
+                }
+            }
+
+            return Fail(
+                "No supported RGBA8/BGRA8 color swapchain format was found.");
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(
+                formatsPointer);
+        }
+    }
+
+    [HideFromIl2Cpp]
+    private void DestroyColorSwapchains()
+    {
+        _swapchainImageSets.Clear();
+
+        if (_xrDestroySwapchain is null)
+        {
+            _colorSwapchains.Clear();
+            return;
+        }
+
+        foreach (var swapchain in _colorSwapchains)
+        {
+            if (swapchain == 0)
+            {
+                continue;
+            }
+
+            try
+            {
+                var result =
+                    _xrDestroySwapchain(
+                        swapchain);
+
+                _logger.LogInfo(
+                    $"[XRBackend] xrDestroySwapchain " +
+                    $"swapchain=0x{swapchain:X}, result={result}.");
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(
+                    $"[XRBackend] xrDestroySwapchain threw: " +
+                    $"{exception.Message}");
+            }
+        }
+
+        _colorSwapchains.Clear();
+    }
+
+    [HideFromIl2Cpp]
+    private void PollOpenXrEvents()
+    {
+        if (_xrPollEvent is null ||
+            _instance == 0)
+        {
+            return;
+        }
+
+        var eventBuffer =
+            Marshal.AllocHGlobal(
+                XrMaxEventDataSize);
+
+        try
+        {
+            for (var eventIndex = 0;
+                 eventIndex < 32;
+                 eventIndex++)
+            {
+                ZeroMemory(
+                    eventBuffer,
+                    XrMaxEventDataSize);
+
+                Marshal.WriteInt32(
+                    eventBuffer,
+                    XrTypeEventDataBuffer);
+
+                var result =
+                    _xrPollEvent(
+                        _instance,
+                        eventBuffer);
+
+                if (result == XrEventUnavailable)
+                {
+                    break;
+                }
+
+                if (result != XrSuccess)
+                {
+                    _logger.LogWarning(
+                        $"[XRBackend] xrPollEvent result={result}.");
+                    break;
+                }
+
+                var eventType =
+                    Marshal.ReadInt32(
+                        eventBuffer);
+
+                if (eventType ==
+                    XrTypeEventDataSessionStateChanged)
+                {
+                    var stateChanged =
+                        Marshal.PtrToStructure<
+                            XrEventDataSessionStateChanged>(
+                                eventBuffer);
+
+                    HandleSessionStateChanged(
+                        stateChanged);
+                }
+                else
+                {
+                    _logger.LogInfo(
+                        $"[XRBackend] OpenXR event type={eventType}.");
+                }
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(
+                eventBuffer);
+        }
+    }
+
+    [HideFromIl2Cpp]
+    private void HandleSessionStateChanged(
+        XrEventDataSessionStateChanged stateChanged)
+    {
+        _sessionState =
+            stateChanged.State;
+
+        _logger.LogInfo(
+            $"[XRBackend] Session state changed: " +
+            $"{FormatSessionState(_sessionState)} " +
+            $"({_sessionState}), time={stateChanged.Time}.");
+
+        switch (_sessionState)
+        {
+            case XrSessionStateReady:
+                BeginSession();
+                break;
+
+            case XrSessionStateStopping:
+                EndSession();
+                break;
+
+            case XrSessionStateLossPending:
+            case XrSessionStateExiting:
+                _exitRequested = true;
+
+                StatusMessage =
+                    $"OpenXR requested session exit: " +
+                    $"{FormatSessionState(_sessionState)}.";
+
+                _logger.LogWarning(
+                    $"[XRBackend] {StatusMessage}");
+                break;
+        }
+    }
+
+    [HideFromIl2Cpp]
+    private bool BeginSession()
+    {
+        if (_sessionRunning)
+        {
+            return true;
+        }
+
+        if (_xrBeginSession is null)
+        {
+            return Fail(
+                "xrBeginSession delegate is unavailable.");
+        }
+
+        var beginInfo =
+            new XrSessionBeginInfo
+            {
+                Type =
+                    XrTypeSessionBeginInfo,
+
+                Next =
+                    IntPtr.Zero,
+
+                PrimaryViewConfigurationType =
+                    XrViewConfigurationTypePrimaryStereo
+            };
+
+        _logger.LogInfo(
+            "[XRBackend] Calling xrBeginSession for " +
+            "XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO.");
+
+        var result =
+            _xrBeginSession(
+                _session,
+                ref beginInfo);
+
+        _logger.LogInfo(
+            $"[XRBackend] xrBeginSession result={result}.");
+
+        if (result != XrSuccess)
+        {
+            return Fail(
+                $"xrBeginSession failed with XrResult {result}.");
+        }
+
+        _sessionRunning = true;
+
+        State =
+            XrBackendState.SessionRunning;
+
+        StatusMessage =
+            "OpenXR session is running.";
+
+        _logger.LogInfo(
+            $"[XRBackend] {StatusMessage}");
+
+        return true;
+    }
+
+    [HideFromIl2Cpp]
+    private void EndSession()
+    {
+        if (!_sessionRunning ||
+            _xrEndSession is null)
+        {
+            return;
+        }
+
+        var result =
+            _xrEndSession(
+                _session);
+
+        _logger.LogInfo(
+            $"[XRBackend] xrEndSession result={result}.");
+
+        _sessionRunning = false;
+
+        if (result == XrSuccess)
+        {
+            State =
+                XrBackendState.WaitingForSessionReady;
+
+            StatusMessage =
+                "OpenXR session stopped; waiting for READY.";
+        }
+        else
+        {
+            Fail(
+                $"xrEndSession failed with XrResult {result}.");
+        }
+    }
+
+    [HideFromIl2Cpp]
+    private void RunEmptyFrame()
+    {
+        if (_xrWaitFrame is null ||
+            _xrBeginFrame is null ||
+            _xrEndFrame is null)
+        {
+            return;
+        }
+
+        var waitInfo =
+            new XrFrameWaitInfo
+            {
+                Type =
+                    XrTypeFrameWaitInfo,
+
+                Next =
+                    IntPtr.Zero
+            };
+
+        var frameState =
+            new XrFrameState
+            {
+                Type =
+                    XrTypeFrameState,
+
+                Next =
+                    IntPtr.Zero
+            };
+
+        var waitResult =
+            _xrWaitFrame(
+                _session,
+                ref waitInfo,
+                ref frameState);
+
+        if (waitResult != XrSuccess)
+        {
+            _logger.LogWarning(
+                $"[XRBackend] xrWaitFrame result={waitResult}.");
+            return;
+        }
+
+        var beginInfo =
+            new XrFrameBeginInfo
+            {
+                Type =
+                    XrTypeFrameBeginInfo,
+
+                Next =
+                    IntPtr.Zero
+            };
+
+        var beginResult =
+            _xrBeginFrame(
+                _session,
+                ref beginInfo);
+
+        if (beginResult != XrSuccess)
+        {
+            _logger.LogWarning(
+                $"[XRBackend] xrBeginFrame result={beginResult}.");
+            return;
+        }
+
+        var renderResult =
+            SubmitTestPatternFrame(
+                frameState);
+
+        _frameCount++;
+
+        if (_frameCount <= 5 ||
+            _frameCount % 120 == 0 ||
+            renderResult != XrSuccess)
+        {
+            _logger.LogInfo(
+                $"[XRBackend] Test frame {_frameCount}: " +
+                $"wait={waitResult}, begin={beginResult}, " +
+                $"end={renderResult}, shouldRender=" +
+                $"{frameState.ShouldRender}, " +
+                $"displayTime={frameState.PredictedDisplayTime}.");
+        }
+
+        if (renderResult == XrSuccess)
+        {
+            State =
+                XrBackendState.TestPatternRendering;
+
+            StatusMessage =
+                "OpenXR stereo test-pattern rendering is active.";
+        }
+    }
+
+    [HideFromIl2Cpp]
+    private int SubmitTestPatternFrame(
+        XrFrameState frameState)
+    {
+        if (_xrEndFrame is null)
+        {
+            return -1;
+        }
+
+        if (frameState.ShouldRender == 0)
+        {
+            var emptyEndInfo =
+                new XrFrameEndInfo
+                {
+                    Type =
+                        XrTypeFrameEndInfo,
+
+                    Next =
+                        IntPtr.Zero,
+
+                    DisplayTime =
+                        frameState.PredictedDisplayTime,
+
+                    EnvironmentBlendMode =
+                        XrEnvironmentBlendModeOpaque,
+
+                    LayerCount =
+                        0,
+
+                    Layers =
+                        IntPtr.Zero
+                };
+
+            return _xrEndFrame(
+                _session,
+                ref emptyEndInfo);
+        }
+
+        if (!TryLocateStereoViews(
+                frameState.PredictedDisplayTime,
+                out var views))
+        {
+            return EndFrameWithoutLayers(
+                frameState.PredictedDisplayTime);
+        }
+
+        if (!TryRenderTestPatternToSwapchains(
+                out var acquiredIndices))
+        {
+            return EndFrameWithoutLayers(
+                frameState.PredictedDisplayTime);
+        }
+
+        try
+        {
+            return EndFrameWithProjectionLayer(
+                frameState.PredictedDisplayTime,
+                views);
+        }
+        finally
+        {
+            ReleaseAcquiredSwapchainImages(
+                acquiredIndices);
+        }
+    }
+
+    [HideFromIl2Cpp]
+    private bool TryLocateStereoViews(
+        long displayTime,
+        out XrView[] views)
+    {
+        views = Array.Empty<XrView>();
+
+        if (_xrLocateViews is null ||
+            _localSpace == 0)
+        {
+            return false;
+        }
+
+        var locateInfo =
+            new XrViewLocateInfo
+            {
+                Type =
+                    XrTypeViewLocateInfo,
+
+                Next =
+                    IntPtr.Zero,
+
+                ViewConfigurationType =
+                    XrViewConfigurationTypePrimaryStereo,
+
+                DisplayTime =
+                    displayTime,
+
+                Space =
+                    _localSpace
+            };
+
+        var viewState =
+            new XrViewState
+            {
+                Type =
+                    XrTypeViewState,
+
+                Next =
+                    IntPtr.Zero
+            };
+
+        const uint viewCapacity = 2;
+
+        var viewSize =
+            Marshal.SizeOf<XrView>();
+
+        var viewsPointer =
+            Marshal.AllocHGlobal(
+                checked((int)viewCapacity * viewSize));
+
+        try
+        {
+            for (var viewIndex = 0;
+                 viewIndex < viewCapacity;
+                 viewIndex++)
+            {
+                var view =
+                    new XrView
+                    {
+                        Type =
+                            XrTypeView,
+
+                        Next =
+                            IntPtr.Zero
+                    };
+
+                Marshal.StructureToPtr(
+                    view,
+                    IntPtr.Add(
+                        viewsPointer,
+                        viewIndex * viewSize),
+                    false);
+            }
+
+            var result =
+                _xrLocateViews(
+                    _session,
+                    ref locateInfo,
+                    ref viewState,
+                    viewCapacity,
+                    out var viewCount,
+                    viewsPointer);
+
+            if (result != XrSuccess ||
+                viewCount != viewCapacity)
+            {
+                _logger.LogWarning(
+                    $"[XRBackend] xrLocateViews result={result}, " +
+                    $"viewCount={viewCount}.");
+                return false;
+            }
+
+            views =
+                new XrView[viewCapacity];
+
+            for (var viewIndex = 0;
+                 viewIndex < viewCapacity;
+                 viewIndex++)
+            {
+                views[viewIndex] =
+                    Marshal.PtrToStructure<XrView>(
+                        IntPtr.Add(
+                            viewsPointer,
+                            viewIndex * viewSize));
+            }
+
+            return true;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(
+                viewsPointer);
+        }
+    }
+
+    [HideFromIl2Cpp]
+    private bool TryRenderTestPatternToSwapchains(
+        out uint[] acquiredIndices)
+    {
+        acquiredIndices =
+            new uint[_swapchainImageSets.Count];
+
+        if (_xrAcquireSwapchainImage is null ||
+            _xrWaitSwapchainImage is null ||
+            _xrReleaseSwapchainImage is null ||
+            _swapchainImageSets.Count != 2)
+        {
+            return false;
+        }
+
+        for (var viewIndex = 0;
+             viewIndex < _swapchainImageSets.Count;
+             viewIndex++)
+        {
+            var imageSet =
+                _swapchainImageSets[viewIndex];
+
+            var acquireInfo =
+                new XrSwapchainImageAcquireInfo
+                {
+                    Type =
+                        XrTypeSwapchainImageAcquireInfo,
+
+                    Next =
+                        IntPtr.Zero
+                };
+
+            var acquireResult =
+                _xrAcquireSwapchainImage(
+                    imageSet.Swapchain,
+                    ref acquireInfo,
+                    out var imageIndex);
+
+            if (acquireResult != XrSuccess ||
+                imageIndex >= imageSet.Textures.Count)
+            {
+                _logger.LogWarning(
+                    $"[XRBackend] xrAcquireSwapchainImage " +
+                    $"view={viewIndex}, result={acquireResult}, " +
+                    $"index={imageIndex}.");
+                return false;
+            }
+
+            acquiredIndices[viewIndex] =
+                imageIndex;
+
+            var waitInfo =
+                new XrSwapchainImageWaitInfo
+                {
+                    Type =
+                        XrTypeSwapchainImageWaitInfo,
+
+                    Next =
+                        IntPtr.Zero,
+
+                    Timeout =
+                        long.MaxValue
+                };
+
+            var waitResult =
+                _xrWaitSwapchainImage(
+                    imageSet.Swapchain,
+                    ref waitInfo);
+
+            if (waitResult != XrSuccess)
+            {
+                _logger.LogWarning(
+                    $"[XRBackend] xrWaitSwapchainImage " +
+                    $"view={viewIndex}, result={waitResult}.");
+                return false;
+            }
+
+            var texture =
+                imageSet.Textures[
+                    checked((int)imageIndex)];
+
+            var isLeftEye =
+                viewIndex == 0;
+
+            if (!D3D11PresentHookProbe.ClearTexture(
+                    _logger,
+                    texture,
+                    isLeftEye ? 0.85f : 0.05f,
+                    0.05f,
+                    isLeftEye ? 0.05f : 0.85f,
+                    1.0f))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    [HideFromIl2Cpp]
+    private void ReleaseAcquiredSwapchainImages(
+        uint[] acquiredIndices)
+    {
+        if (_xrReleaseSwapchainImage is null)
+        {
+            return;
+        }
+
+        for (var viewIndex = 0;
+             viewIndex < acquiredIndices.Length &&
+             viewIndex < _swapchainImageSets.Count;
+             viewIndex++)
+        {
+            var releaseInfo =
+                new XrSwapchainImageReleaseInfo
+                {
+                    Type =
+                        XrTypeSwapchainImageReleaseInfo,
+
+                    Next =
+                        IntPtr.Zero
+                };
+
+            var result =
+                _xrReleaseSwapchainImage(
+                    _swapchainImageSets[viewIndex].Swapchain,
+                    ref releaseInfo);
+
+            if (result != XrSuccess)
+            {
+                _logger.LogWarning(
+                    $"[XRBackend] xrReleaseSwapchainImage " +
+                    $"view={viewIndex}, result={result}.");
+            }
+        }
+    }
+
+    [HideFromIl2Cpp]
+    private int EndFrameWithProjectionLayer(
+        long displayTime,
+        XrView[] views)
+    {
+        if (_xrEndFrame is null ||
+            views.Length != 2 ||
+            _swapchainImageSets.Count != 2)
+        {
+            return -1;
+        }
+
+        var projectionViewSize =
+            Marshal.SizeOf<XrCompositionLayerProjectionView>();
+
+        var projectionViewsPointer =
+            Marshal.AllocHGlobal(
+                2 * projectionViewSize);
+
+        var layerPointer =
+            IntPtr.Zero;
+
+        var layersPointer =
+            IntPtr.Zero;
+
+        try
+        {
+            for (var viewIndex = 0;
+                 viewIndex < 2;
+                 viewIndex++)
+            {
+                var imageSet =
+                    _swapchainImageSets[viewIndex];
+
+                var projectionView =
+                    new XrCompositionLayerProjectionView
+                    {
+                        Type =
+                            XrTypeCompositionLayerProjectionView,
+
+                        Next =
+                            IntPtr.Zero,
+
+                        Pose =
+                            views[viewIndex].Pose,
+
+                        Fov =
+                            views[viewIndex].Fov,
+
+                        SubImage =
+                            new XrSwapchainSubImage
+                            {
+                                Swapchain =
+                                    imageSet.Swapchain,
+
+                                ImageRect =
+                                    new XrRect2Di
+                                    {
+                                        Offset =
+                                            new XrOffset2Di
+                                            {
+                                                X = 0,
+                                                Y = 0
+                                            },
+
+                                        Extent =
+                                            new XrExtent2Di
+                                            {
+                                                Width =
+                                                    checked((int)imageSet.Width),
+
+                                                Height =
+                                                    checked((int)imageSet.Height)
+                                            }
+                                    },
+
+                                ImageArrayIndex =
+                                    0
+                            }
+                    };
+
+                Marshal.StructureToPtr(
+                    projectionView,
+                    IntPtr.Add(
+                        projectionViewsPointer,
+                        viewIndex * projectionViewSize),
+                    false);
+            }
+
+            var layer =
+                new XrCompositionLayerProjection
+                {
+                    Type =
+                        XrTypeCompositionLayerProjection,
+
+                    Next =
+                        IntPtr.Zero,
+
+                    LayerFlags =
+                        0,
+
+                    Space =
+                        _localSpace,
+
+                    ViewCount =
+                        2,
+
+                    Views =
+                        projectionViewsPointer
+                };
+
+            layerPointer =
+                Marshal.AllocHGlobal(
+                    Marshal.SizeOf<XrCompositionLayerProjection>());
+
+            Marshal.StructureToPtr(
+                layer,
+                layerPointer,
+                false);
+
+            layersPointer =
+                Marshal.AllocHGlobal(
+                    IntPtr.Size);
+
+            Marshal.WriteIntPtr(
+                layersPointer,
+                layerPointer);
+
+            var endInfo =
+                new XrFrameEndInfo
+                {
+                    Type =
+                        XrTypeFrameEndInfo,
+
+                    Next =
+                        IntPtr.Zero,
+
+                    DisplayTime =
+                        displayTime,
+
+                    EnvironmentBlendMode =
+                        XrEnvironmentBlendModeOpaque,
+
+                    LayerCount =
+                        1,
+
+                    Layers =
+                        layersPointer
+                };
+
+            return _xrEndFrame(
+                _session,
+                ref endInfo);
+        }
+        finally
+        {
+            if (layersPointer != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(
+                    layersPointer);
+            }
+
+            if (layerPointer != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(
+                    layerPointer);
+            }
+
+            Marshal.FreeHGlobal(
+                projectionViewsPointer);
+        }
+    }
+
+    [HideFromIl2Cpp]
+    private int EndFrameWithoutLayers(
+        long displayTime)
+    {
+        if (_xrEndFrame is null)
+        {
+            return -1;
+        }
+
+        var endInfo =
+            new XrFrameEndInfo
+            {
+                Type =
+                    XrTypeFrameEndInfo,
+
+                Next =
+                    IntPtr.Zero,
+
+                DisplayTime =
+                    displayTime,
+
+                EnvironmentBlendMode =
+                    XrEnvironmentBlendModeOpaque,
+
+                LayerCount =
+                    0,
+
+                Layers =
+                    IntPtr.Zero
+            };
+
+        return _xrEndFrame(
+            _session,
+            ref endInfo);
+    }
+
+    private static void ZeroMemory(
+        IntPtr address,
+        int byteCount)
+    {
+        var zeroes =
+            new byte[byteCount];
+
+        Marshal.Copy(
+            zeroes,
+            0,
+            address,
+            byteCount);
+    }
+
+    private static string FormatSessionState(
+        int state)
+    {
+        return state switch
+        {
+            XrSessionStateUnknown => "UNKNOWN",
+            XrSessionStateIdle => "IDLE",
+            XrSessionStateReady => "READY",
+            XrSessionStateSynchronized => "SYNCHRONIZED",
+            XrSessionStateVisible => "VISIBLE",
+            XrSessionStateFocused => "FOCUSED",
+            XrSessionStateStopping => "STOPPING",
+            XrSessionStateLossPending => "LOSS_PENDING",
+            XrSessionStateExiting => "EXITING",
+            _ => $"UNKNOWN_{state}"
+        };
     }
 
     [HideFromIl2Cpp]
@@ -681,9 +2566,60 @@ internal sealed class OpenXrNativeBackend : IXrBackend
 
         _graphicsRequirements = default;
         _systemId = 0;
+        _exitRequested = true;
+
+        if (_sessionRunning)
+        {
+            EndSession();
+        }
+
+        DestroyColorSwapchains();
+
+        if (_localSpace != 0 &&
+            _xrDestroySpace is not null)
+        {
+            try
+            {
+                var result =
+                    _xrDestroySpace(_localSpace);
+
+                _logger.LogInfo(
+                    $"[XRBackend] xrDestroySpace result={result}.");
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(
+                    $"[XRBackend] xrDestroySpace threw: " +
+                    $"{exception.Message}");
+            }
+
+            _localSpace = 0;
+        }
 
         _xrGetD3D11GraphicsRequirementsKhr = null;
         _xrGetSystem = null;
+
+        if (_session != 0 &&
+            _xrDestroySession is not null)
+        {
+            try
+            {
+                var result =
+                    _xrDestroySession(_session);
+
+                _logger.LogInfo(
+                    $"[XRBackend] " +
+                    $"xrDestroySession result={result}.");
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(
+                    $"[XRBackend] xrDestroySession threw: " +
+                    $"{exception.Message}");
+            }
+
+            _session = 0;
+        }
 
         if (_instance != 0 &&
             _xrDestroyInstance is not null)
@@ -710,6 +2646,25 @@ internal sealed class OpenXrNativeBackend : IXrBackend
         _xrGetInstanceProcAddr = null;
         _xrCreateInstance = null;
         _xrDestroyInstance = null;
+        _xrCreateSession = null;
+        _xrDestroySession = null;
+        _xrPollEvent = null;
+        _xrBeginSession = null;
+        _xrEndSession = null;
+        _xrCreateReferenceSpace = null;
+        _xrDestroySpace = null;
+        _xrWaitFrame = null;
+        _xrBeginFrame = null;
+        _xrEndFrame = null;
+        _xrEnumerateViewConfigurationViews = null;
+        _xrEnumerateSwapchainFormats = null;
+        _xrCreateSwapchain = null;
+        _xrDestroySwapchain = null;
+        _xrEnumerateSwapchainImages = null;
+        _xrAcquireSwapchainImage = null;
+        _xrWaitSwapchainImage = null;
+        _xrReleaseSwapchainImage = null;
+        _xrLocateViews = null;
         _xrGetInstanceProcAddrAddress =
             IntPtr.Zero;
 
@@ -750,6 +2705,152 @@ internal sealed class OpenXrNativeBackend : IXrBackend
     private delegate int
         XrDestroyInstanceDelegate(
             ulong instance);
+
+    [UnmanagedFunctionPointer(
+        CallingConvention.Cdecl)]
+    private delegate int
+        XrCreateSessionDelegate(
+            ulong instance,
+            ref XrSessionCreateInfo createInfo,
+            out ulong session);
+
+    [UnmanagedFunctionPointer(
+        CallingConvention.Cdecl)]
+    private delegate int
+        XrDestroySessionDelegate(
+            ulong session);
+
+    [UnmanagedFunctionPointer(
+        CallingConvention.Cdecl)]
+    private delegate int
+        XrPollEventDelegate(
+            ulong instance,
+            IntPtr eventData);
+
+    [UnmanagedFunctionPointer(
+        CallingConvention.Cdecl)]
+    private delegate int
+        XrBeginSessionDelegate(
+            ulong session,
+            ref XrSessionBeginInfo beginInfo);
+
+    [UnmanagedFunctionPointer(
+        CallingConvention.Cdecl)]
+    private delegate int
+        XrEndSessionDelegate(
+            ulong session);
+
+    [UnmanagedFunctionPointer(
+        CallingConvention.Cdecl)]
+    private delegate int
+        XrCreateReferenceSpaceDelegate(
+            ulong session,
+            ref XrReferenceSpaceCreateInfo createInfo,
+            out ulong space);
+
+    [UnmanagedFunctionPointer(
+        CallingConvention.Cdecl)]
+    private delegate int
+        XrDestroySpaceDelegate(
+            ulong space);
+
+    [UnmanagedFunctionPointer(
+        CallingConvention.Cdecl)]
+    private delegate int
+        XrWaitFrameDelegate(
+            ulong session,
+            ref XrFrameWaitInfo frameWaitInfo,
+            ref XrFrameState frameState);
+
+    [UnmanagedFunctionPointer(
+        CallingConvention.Cdecl)]
+    private delegate int
+        XrBeginFrameDelegate(
+            ulong session,
+            ref XrFrameBeginInfo frameBeginInfo);
+
+    [UnmanagedFunctionPointer(
+        CallingConvention.Cdecl)]
+    private delegate int
+        XrEndFrameDelegate(
+            ulong session,
+            ref XrFrameEndInfo frameEndInfo);
+
+    [UnmanagedFunctionPointer(
+        CallingConvention.Cdecl)]
+    private delegate int
+        XrEnumerateViewConfigurationViewsDelegate(
+            ulong instance,
+            ulong systemId,
+            int viewConfigurationType,
+            uint viewCapacityInput,
+            out uint viewCountOutput,
+            IntPtr views);
+
+    [UnmanagedFunctionPointer(
+        CallingConvention.Cdecl)]
+    private delegate int
+        XrEnumerateSwapchainFormatsDelegate(
+            ulong session,
+            uint formatCapacityInput,
+            out uint formatCountOutput,
+            IntPtr formats);
+
+    [UnmanagedFunctionPointer(
+        CallingConvention.Cdecl)]
+    private delegate int
+        XrCreateSwapchainDelegate(
+            ulong session,
+            ref XrSwapchainCreateInfo createInfo,
+            out ulong swapchain);
+
+    [UnmanagedFunctionPointer(
+        CallingConvention.Cdecl)]
+    private delegate int
+        XrDestroySwapchainDelegate(
+            ulong swapchain);
+
+    [UnmanagedFunctionPointer(
+        CallingConvention.Cdecl)]
+    private delegate int
+        XrEnumerateSwapchainImagesDelegate(
+            ulong swapchain,
+            uint imageCapacityInput,
+            out uint imageCountOutput,
+            IntPtr images);
+
+    [UnmanagedFunctionPointer(
+        CallingConvention.Cdecl)]
+    private delegate int
+        XrAcquireSwapchainImageDelegate(
+            ulong swapchain,
+            ref XrSwapchainImageAcquireInfo acquireInfo,
+            out uint index);
+
+    [UnmanagedFunctionPointer(
+        CallingConvention.Cdecl)]
+    private delegate int
+        XrWaitSwapchainImageDelegate(
+            ulong swapchain,
+            ref XrSwapchainImageWaitInfo waitInfo);
+
+    [UnmanagedFunctionPointer(
+        CallingConvention.Cdecl)]
+    private delegate int
+        XrReleaseSwapchainImageDelegate(
+            ulong swapchain,
+            ref XrSwapchainImageReleaseInfo releaseInfo);
+
+    [UnmanagedFunctionPointer(
+        CallingConvention.Cdecl)]
+    private delegate int
+        XrLocateViewsDelegate(
+            ulong session,
+            ref XrViewLocateInfo viewLocateInfo,
+            ref XrViewState viewState,
+            uint viewCapacityInput,
+            out uint viewCountOutput,
+            IntPtr views);
 
     [UnmanagedFunctionPointer(
         CallingConvention.Cdecl)]
@@ -808,6 +2909,275 @@ internal sealed class OpenXrNativeBackend : IXrBackend
         public int Type;
         public IntPtr Next;
         public int FormFactor;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrEventDataSessionStateChanged
+    {
+        public int Type;
+        public IntPtr Next;
+        public ulong Session;
+        public int State;
+        public long Time;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrSessionBeginInfo
+    {
+        public int Type;
+        public IntPtr Next;
+        public int PrimaryViewConfigurationType;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrReferenceSpaceCreateInfo
+    {
+        public int Type;
+        public IntPtr Next;
+        public int ReferenceSpaceType;
+        public XrPosef PoseInReferenceSpace;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrPosef
+    {
+        public XrQuaternionf Orientation;
+        public XrVector3f Position;
+
+        public static XrPosef Identity =>
+            new()
+            {
+                Orientation =
+                    new XrQuaternionf
+                    {
+                        X = 0,
+                        Y = 0,
+                        Z = 0,
+                        W = 1
+                    },
+
+                Position =
+                    new XrVector3f
+                    {
+                        X = 0,
+                        Y = 0,
+                        Z = 0
+                    }
+            };
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrQuaternionf
+    {
+        public float X;
+        public float Y;
+        public float Z;
+        public float W;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrVector3f
+    {
+        public float X;
+        public float Y;
+        public float Z;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrFrameWaitInfo
+    {
+        public int Type;
+        public IntPtr Next;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrFrameState
+    {
+        public int Type;
+        public IntPtr Next;
+        public long PredictedDisplayTime;
+        public long PredictedDisplayPeriod;
+        public uint ShouldRender;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrFrameBeginInfo
+    {
+        public int Type;
+        public IntPtr Next;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrFrameEndInfo
+    {
+        public int Type;
+        public IntPtr Next;
+        public long DisplayTime;
+        public int EnvironmentBlendMode;
+        public uint LayerCount;
+        public IntPtr Layers;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrViewLocateInfo
+    {
+        public int Type;
+        public IntPtr Next;
+        public int ViewConfigurationType;
+        public long DisplayTime;
+        public ulong Space;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrViewState
+    {
+        public int Type;
+        public IntPtr Next;
+        public ulong ViewStateFlags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrView
+    {
+        public int Type;
+        public IntPtr Next;
+        public XrPosef Pose;
+        public XrFovf Fov;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrFovf
+    {
+        public float AngleLeft;
+        public float AngleRight;
+        public float AngleUp;
+        public float AngleDown;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrSwapchainImageAcquireInfo
+    {
+        public int Type;
+        public IntPtr Next;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrSwapchainImageWaitInfo
+    {
+        public int Type;
+        public IntPtr Next;
+        public long Timeout;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrSwapchainImageReleaseInfo
+    {
+        public int Type;
+        public IntPtr Next;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrCompositionLayerProjection
+    {
+        public int Type;
+        public IntPtr Next;
+        public ulong LayerFlags;
+        public ulong Space;
+        public uint ViewCount;
+        public IntPtr Views;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrCompositionLayerProjectionView
+    {
+        public int Type;
+        public IntPtr Next;
+        public XrPosef Pose;
+        public XrFovf Fov;
+        public XrSwapchainSubImage SubImage;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrSwapchainSubImage
+    {
+        public ulong Swapchain;
+        public XrRect2Di ImageRect;
+        public uint ImageArrayIndex;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrRect2Di
+    {
+        public XrOffset2Di Offset;
+        public XrExtent2Di Extent;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrOffset2Di
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrExtent2Di
+    {
+        public int Width;
+        public int Height;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrViewConfigurationView
+    {
+        public int Type;
+        public IntPtr Next;
+        public uint RecommendedImageRectWidth;
+        public uint MaxImageRectWidth;
+        public uint RecommendedImageRectHeight;
+        public uint MaxImageRectHeight;
+        public uint RecommendedSwapchainSampleCount;
+        public uint MaxSwapchainSampleCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrSwapchainCreateInfo
+    {
+        public int Type;
+        public IntPtr Next;
+        public ulong CreateFlags;
+        public ulong UsageFlags;
+        public long Format;
+        public uint SampleCount;
+        public uint Width;
+        public uint Height;
+        public uint FaceCount;
+        public uint ArraySize;
+        public uint MipCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrSwapchainImageD3D11Khr
+    {
+        public int Type;
+        public IntPtr Next;
+        public IntPtr Texture;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrSessionCreateInfo
+    {
+        public int Type;
+        public IntPtr Next;
+        public ulong CreateFlags;
+        public ulong SystemId;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrGraphicsBindingD3D11Khr
+    {
+        public int Type;
+        public IntPtr Next;
+        public IntPtr Device;
     }
 
     [StructLayout(LayoutKind.Sequential)]

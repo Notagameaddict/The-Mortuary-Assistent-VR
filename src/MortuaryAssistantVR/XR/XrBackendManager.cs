@@ -8,6 +8,7 @@ internal static class XrBackendManager
     private static readonly object SyncRoot = new();
     private static IXrBackend? _backend;
     private static bool _initializationAttempted;
+    private static bool _updateObserved;
 
     [HideFromIl2Cpp]
     internal static void Initialize(
@@ -35,12 +36,16 @@ internal static class XrBackendManager
 
             _initializationAttempted = true;
 
-            logger.LogInfo("=== XR Backend initialization begin ===");
+            logger.LogInfo(
+                "=== XR Backend initialization begin ===");
 
             try
             {
-                _backend = new OpenXrNativeBackend(logger);
-                var success = _backend.Initialize(attemptStartup);
+                _backend =
+                    new OpenXrNativeBackend(logger);
+
+                var success =
+                    _backend.Initialize(attemptStartup);
 
                 logger.LogInfo(
                     $"[XRBackend] Name='{_backend.Name}', " +
@@ -58,39 +63,64 @@ internal static class XrBackendManager
                 }
                 catch
                 {
-                    // Preserve the original initialization exception in the log.
+                    // Preserve the original initialization exception.
                 }
 
                 _backend = null;
             }
             finally
             {
-                logger.LogInfo("=== XR Backend initialization end ===");
+                logger.LogInfo(
+                    "=== XR Backend initialization end ===");
             }
         }
     }
 
     [HideFromIl2Cpp]
-    internal static void LogState(ManualLogSource logger)
+    internal static void Update(
+        ManualLogSource logger)
+    {
+        lock (SyncRoot)
+        {
+            if (!_updateObserved)
+            {
+                _updateObserved = true;
+                logger.LogInfo(
+                    "[XRBackend] First managed update poll observed.");
+            }
+
+            if (_backend is OpenXrNativeBackend nativeBackend)
+            {
+                nativeBackend.PollUnityGraphicsDevice();
+            }
+        }
+    }
+
+    [HideFromIl2Cpp]
+    internal static void LogState(
+        ManualLogSource logger)
     {
         lock (SyncRoot)
         {
             if (_backend is null)
             {
                 logger.LogInfo(
-                    $"[XRBackend] No active backend instance. " +
+                    "[XRBackend] No active backend instance. " +
                     $"initializationAttempted={_initializationAttempted}");
                 return;
             }
 
             logger.LogInfo(
-                $"[XRBackend] Current state: name='{_backend.Name}', " +
-                $"state={_backend.State}, status='{_backend.StatusMessage}'");
+                $"[XRBackend] Current state: " +
+                $"name='{_backend.Name}', " +
+                $"state={_backend.State}, " +
+                $"status='{_backend.StatusMessage}'");
         }
     }
 
     [HideFromIl2Cpp]
-    internal static void Shutdown(ManualLogSource logger)
+    internal static void Shutdown(
+        ManualLogSource logger)
     {
         lock (SyncRoot)
         {
@@ -99,7 +129,8 @@ internal static class XrBackendManager
                 return;
             }
 
-            logger.LogInfo("Shutting down XR backend.");
+            logger.LogInfo(
+                "Shutting down XR backend.");
 
             try
             {
@@ -108,7 +139,8 @@ internal static class XrBackendManager
             catch (Exception exception)
             {
                 logger.LogWarning(
-                    $"XR backend shutdown reported: {exception.Message}");
+                    $"XR backend shutdown reported: " +
+                    $"{exception.Message}");
             }
             finally
             {

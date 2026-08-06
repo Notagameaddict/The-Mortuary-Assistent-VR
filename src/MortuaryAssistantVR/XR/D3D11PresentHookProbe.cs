@@ -35,7 +35,8 @@ internal static class D3D11PresentHookProbe
     [HideFromIl2Cpp]
     internal static bool TryGetDevice(
         ManualLogSource logger,
-        out UnityD3D11DeviceInfo deviceInfo)
+        out UnityD3D11DeviceInfo deviceInfo,
+        bool logResult)
     {
         deviceInfo = default;
 
@@ -48,12 +49,16 @@ internal static class D3D11PresentHookProbe
                     out var luidHighPart,
                     out var featureLevel);
 
-            logger.LogInfo(
-                $"[PresentHookProbe] Query result={result}, " +
-                $"device=0x{devicePointer.ToInt64():X}, " +
-                $"luidHigh=0x{unchecked((uint)luidHighPart):X8}, " +
-                $"luidLow=0x{luidLowPart:X8}, " +
-                $"featureLevel=0x{featureLevel:X}.");
+            if (logResult ||
+                result == 0)
+            {
+                logger.LogInfo(
+                    $"[PresentHookProbe] Query result={result}, " +
+                    $"device=0x{devicePointer.ToInt64():X}, " +
+                    $"luidHigh=0x{unchecked((uint)luidHighPart):X8}, " +
+                    $"luidLow=0x{luidLowPart:X8}, " +
+                    $"featureLevel=0x{featureLevel:X}.");
+            }
 
             if (result != 0 ||
                 devicePointer == IntPtr.Zero)
@@ -79,6 +84,50 @@ internal static class D3D11PresentHookProbe
         }
     }
 
+    [HideFromIl2Cpp]
+    internal static bool ClearTexture(
+        ManualLogSource logger,
+        IntPtr texture,
+        float red,
+        float green,
+        float blue,
+        float alpha)
+    {
+        if (texture == IntPtr.Zero)
+        {
+            logger.LogError(
+                "[PresentHookProbe] Cannot clear a null texture.");
+            return false;
+        }
+
+        try
+        {
+            var result =
+                MavrClearD3D11Texture(
+                    texture,
+                    red,
+                    green,
+                    blue,
+                    alpha);
+
+            if (result != 0)
+            {
+                logger.LogError(
+                    $"[PresentHookProbe] Clear texture failed: " +
+                    $"result={result}, texture=0x{texture.ToInt64():X}.");
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(
+                $"[PresentHookProbe] Clear texture threw: {exception}");
+            return false;
+        }
+    }
+
     [DllImport(
         LibraryName,
         EntryPoint = "MAVR_InstallPresentHook",
@@ -96,4 +145,22 @@ internal static class D3D11PresentHookProbe
             out uint adapterLuidLowPart,
             out int adapterLuidHighPart,
             out int featureLevel);
+
+    [DllImport(
+        LibraryName,
+        EntryPoint = "MAVR_ClearD3D11Texture",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int
+        MavrClearD3D11Texture(
+            IntPtr texture,
+            float red,
+            float green,
+            float blue,
+            float alpha);
 }
+
+internal readonly record struct UnityD3D11DeviceInfo(
+    IntPtr DevicePointer,
+    uint AdapterLuidLowPart,
+    int AdapterLuidHighPart,
+    int FeatureLevel);
