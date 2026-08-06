@@ -41,17 +41,19 @@ jobs:
         run: |
           $library = Get-ChildItem `
             -Path minhook-build `
-            -Filter minhook.lib `
+            -Filter "minhook*.lib" `
             -Recurse |
+            Where-Object { $_.Name -notlike "*.recipe" } |
             Select-Object -First 1
 
           if ($null -eq $library) {
             Write-Host "Contents of minhook-build:"
             Get-ChildItem minhook-build -Recurse
-            throw "minhook.lib was not found."
+            throw "No MinHook library was found."
           }
 
           Write-Host "MinHook library: $($library.FullName)"
+
           "library=$($library.FullName)" |
             Out-File `
               -FilePath $env:GITHUB_OUTPUT `
