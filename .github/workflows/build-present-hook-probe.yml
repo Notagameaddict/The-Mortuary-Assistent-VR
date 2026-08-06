@@ -50,7 +50,7 @@ jobs:
           cl /nologo /LD /EHsc /std:c++17 ^
             /I "minhook\include" ^
             "native\PresentHookProbe\PresentHookProbe.cpp" ^
-            "minhook-build\Release\minhook.lib" ^
+            "minhook-build\src\Release\minhook.lib" ^
             d3d11.lib dxgi.lib user32.lib ^
             /link ^
             /OUT:"artifact\MortuaryAssistantVR.PresentHookProbe.dll"
