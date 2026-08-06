@@ -24,7 +24,7 @@ jobs:
           cmake `
             -S openxr-sdk `
             -B openxr-build `
-            -G "Visual Studio 17 2022" `
+            -G "Visual Studio 18 2026" `
             -A x64 `
             -DDYNAMIC_LOADER=ON `
             -DBUILD_TESTS=OFF
