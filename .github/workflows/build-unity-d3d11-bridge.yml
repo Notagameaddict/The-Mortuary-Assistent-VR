@@ -1,0 +1,53 @@
+name: Build Unity D3D11 Bridge
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out mod repository
+        uses: actions/checkout@v4
+
+      - name: Check out official Unity native plugin example
+        uses: actions/checkout@v4
+        with:
+          repository: Unity-Technologies/NativeRenderingPlugin
+          path: unity-native-plugin
+
+      - name: Configure MSVC environment and build bridge
+        shell: cmd
+        run: |
+          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          if errorlevel 1 exit /b 1
+
+          mkdir artifact
+
+          cl /nologo /LD /EHsc /std:c++17 ^
+            /I "unity-native-plugin\PluginSource\source\Unity" ^
+            "native\UnityD3D11Bridge\UnityD3D11Bridge.cpp" ^
+            /link /OUT:"artifact\MortuaryAssistantVR.UnityD3D11Bridge.dll" ^
+            d3d11.lib dxgi.lib
+
+      - name: Write SHA-256
+        shell: pwsh
+        run: |
+          $path = "artifact\MortuaryAssistantVR.UnityD3D11Bridge.dll"
+          $hash = Get-FileHash $path -Algorithm SHA256
+          "$($hash.Hash)  MortuaryAssistantVR.UnityD3D11Bridge.dll" |
+            Set-Content `
+              "artifact\MortuaryAssistantVR.UnityD3D11Bridge.dll.sha256.txt" `
+              -Encoding ASCII
+
+      - name: Upload bridge artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mortuary-assistant-vr-unity-d3d11-bridge
+          path: artifact
+          if-no-files-found: error
+          retention-days: 14

@@ -2,7 +2,12 @@ namespace MortuaryAssistantVR;
 
 internal static class PluginInfo
 {
-    public const string Guid = "com.notagameaddict.mortuaryassistantvr";
-    public const string Name = "MortuaryAssistantVR";
-    public const string Version = "0.8.0";
+    public const string Guid =
+        "com.notagameaddict.mortuaryassistantvr";
+
+    public const string Name =
+        "MortuaryAssistantVR";
+
+    public const string Version =
+        "0.11.0";
 }

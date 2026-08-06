@@ -8,7 +8,9 @@ internal enum XrBackendState
     EntryPointResolved = 3,
     StartupDisabled = 4,
     InstanceCreated = 5,
-    InstanceCreationFailed = 6,
-    Failed = 7,
-    Disposed = 8
+    GraphicsRequirementsReady = 6,
+    UnityGraphicsDeviceReady = 7,
+    InstanceCreationFailed = 8,
+    Failed = 9,
+    Disposed = 10
 }
