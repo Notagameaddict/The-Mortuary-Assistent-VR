@@ -21,18 +21,27 @@ jobs:
           path: unity-native-plugin
 
       - name: Configure MSVC environment and build bridge
-        shell: cmd
-        run: |
-          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          if errorlevel 1 exit /b 1
+  shell: cmd
+  run: |
+    for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSINSTALL=%%i"
 
-          mkdir artifact
+    if not defined VSINSTALL (
+      echo Visual Studio with C++ build tools was not found.
+      exit /b 1
+    )
 
-          cl /nologo /LD /EHsc /std:c++17 ^
-            /I "unity-native-plugin\PluginSource\source\Unity" ^
-            "native\UnityD3D11Bridge\UnityD3D11Bridge.cpp" ^
-            /link /OUT:"artifact\MortuaryAssistantVR.UnityD3D11Bridge.dll" ^
-            d3d11.lib dxgi.lib
+    echo Visual Studio installation: %VSINSTALL%
+
+    call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
+    if errorlevel 1 exit /b 1
+
+    mkdir artifact
+
+    cl /nologo /LD /EHsc /std:c++17 ^
+      /I "unity-native-plugin\PluginSource\source\Unity" ^
+      "native\UnityD3D11Bridge\UnityD3D11Bridge.cpp" ^
+      /link /OUT:"artifact\MortuaryAssistantVR.UnityD3D11Bridge.dll" ^
+      d3d11.lib dxgi.lib
 
       - name: Write SHA-256
         shell: pwsh
