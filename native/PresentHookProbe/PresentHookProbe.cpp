@@ -295,11 +295,18 @@ int __cdecl MAVR_GetCapturedD3D11DeviceInfo(
 extern "C" __declspec(dllexport) int __cdecl
 MAVR_ClearD3D11Texture(
     void* texturePointer,
+    std::int64_t dxgiFormat,
     float red,
     float green,
     float blue,
-    float alpha)
+    float alpha,
+    std::int32_t* createViewHResult)
 {
+    if (createViewHResult != nullptr)
+    {
+        *createViewHResult = S_OK;
+    }
+
     if (texturePointer == nullptr)
     {
         return 1;
@@ -307,6 +314,9 @@ MAVR_ClearD3D11Texture(
 
     ID3D11Texture2D* texture =
         reinterpret_cast<ID3D11Texture2D*>(texturePointer);
+
+    D3D11_TEXTURE2D_DESC textureDescription = {};
+    texture->GetDesc(&textureDescription);
 
     ID3D11Device* device = nullptr;
     texture->GetDevice(&device);
@@ -325,13 +335,45 @@ MAVR_ClearD3D11Texture(
         return 3;
     }
 
+    D3D11_RENDER_TARGET_VIEW_DESC viewDescription = {};
+    viewDescription.Format =
+        static_cast<DXGI_FORMAT>(dxgiFormat);
+
+    if (textureDescription.ArraySize > 1)
+    {
+        viewDescription.ViewDimension =
+            D3D11_RTV_DIMENSION_TEXTURE2DARRAY;
+
+        viewDescription.Texture2DArray.MipSlice = 0;
+        viewDescription.Texture2DArray.FirstArraySlice = 0;
+        viewDescription.Texture2DArray.ArraySize = 1;
+    }
+    else if (textureDescription.SampleDesc.Count > 1)
+    {
+        viewDescription.ViewDimension =
+            D3D11_RTV_DIMENSION_TEXTURE2DMS;
+    }
+    else
+    {
+        viewDescription.ViewDimension =
+            D3D11_RTV_DIMENSION_TEXTURE2D;
+
+        viewDescription.Texture2D.MipSlice = 0;
+    }
+
     ID3D11RenderTargetView* renderTargetView = nullptr;
 
-    const HRESULT viewResult =
+    HRESULT viewResult =
         device->CreateRenderTargetView(
             texture,
-            nullptr,
+            &viewDescription,
             &renderTargetView);
+
+    if (createViewHResult != nullptr)
+    {
+        *createViewHResult =
+            static_cast<std::int32_t>(viewResult);
+    }
 
     if (FAILED(viewResult) ||
         renderTargetView == nullptr)

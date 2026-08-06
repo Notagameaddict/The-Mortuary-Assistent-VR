@@ -88,6 +88,7 @@ internal static class D3D11PresentHookProbe
     internal static bool ClearTexture(
         ManualLogSource logger,
         IntPtr texture,
+        long dxgiFormat,
         float red,
         float green,
         float blue,
@@ -105,16 +106,21 @@ internal static class D3D11PresentHookProbe
             var result =
                 MavrClearD3D11Texture(
                     texture,
+                    dxgiFormat,
                     red,
                     green,
                     blue,
-                    alpha);
+                    alpha,
+                    out var createViewHResult);
 
             if (result != 0)
             {
                 logger.LogError(
                     $"[PresentHookProbe] Clear texture failed: " +
-                    $"result={result}, texture=0x{texture.ToInt64():X}.");
+                    $"result={result}, hresult=0x" +
+                    $"{unchecked((uint)createViewHResult):X8}, " +
+                    $"format={dxgiFormat}, " +
+                    $"texture=0x{texture.ToInt64():X}.");
                 return false;
             }
 
@@ -153,10 +159,12 @@ internal static class D3D11PresentHookProbe
     private static extern int
         MavrClearD3D11Texture(
             IntPtr texture,
+            long dxgiFormat,
             float red,
             float green,
             float blue,
-            float alpha);
+            float alpha,
+            out int createViewHResult);
 }
 
 internal readonly record struct UnityD3D11DeviceInfo(

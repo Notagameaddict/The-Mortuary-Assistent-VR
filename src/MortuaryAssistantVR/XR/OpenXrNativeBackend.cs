@@ -1843,7 +1843,8 @@ internal sealed class OpenXrNativeBackend : IXrBackend
 
         var renderResult =
             SubmitTestPatternFrame(
-                frameState);
+                frameState,
+                out var projectionSubmitted);
 
         _frameCount++;
 
@@ -1859,7 +1860,8 @@ internal sealed class OpenXrNativeBackend : IXrBackend
                 $"displayTime={frameState.PredictedDisplayTime}.");
         }
 
-        if (renderResult == XrSuccess)
+        if (renderResult == XrSuccess &&
+            projectionSubmitted)
         {
             State =
                 XrBackendState.TestPatternRendering;
@@ -1871,8 +1873,11 @@ internal sealed class OpenXrNativeBackend : IXrBackend
 
     [HideFromIl2Cpp]
     private int SubmitTestPatternFrame(
-        XrFrameState frameState)
+        XrFrameState frameState,
+        out bool projectionSubmitted)
     {
+        projectionSubmitted = false;
+
         if (_xrEndFrame is null)
         {
             return -1;
@@ -1924,9 +1929,15 @@ internal sealed class OpenXrNativeBackend : IXrBackend
 
         try
         {
-            return EndFrameWithProjectionLayer(
-                frameState.PredictedDisplayTime,
-                views);
+            var endResult =
+                EndFrameWithProjectionLayer(
+                    frameState.PredictedDisplayTime,
+                    views);
+
+            projectionSubmitted =
+                endResult == XrSuccess;
+
+            return endResult;
         }
         finally
         {
@@ -2138,6 +2149,7 @@ internal sealed class OpenXrNativeBackend : IXrBackend
             if (!D3D11PresentHookProbe.ClearTexture(
                     _logger,
                     texture,
+                    imageSet.Format,
                     isLeftEye ? 0.85f : 0.05f,
                     0.05f,
                     isLeftEye ? 0.05f : 0.85f,
