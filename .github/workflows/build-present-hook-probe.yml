@@ -34,6 +34,10 @@ jobs:
           cmake `
             --build minhook-build `
             --config Release
+                - name: List MinHook build output
+        shell: pwsh
+        run: |
+          Get-ChildItem minhook-build -Recurse
 
       - name: Build probe DLL
         shell: cmd
