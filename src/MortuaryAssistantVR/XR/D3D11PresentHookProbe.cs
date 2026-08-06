@@ -6,6 +6,11 @@ namespace MortuaryAssistantVR.XR;
 
 internal static class D3D11PresentHookProbe
 {
+    private static readonly object CallbackSyncRoot = new();
+
+    private static Action? _managedPresentCallback;
+    private static NativePresentCallbackDelegate? _nativePresentCallback;
+
     private const string LibraryName =
         "MortuaryAssistantVR.PresentHookProbe";
 
@@ -133,6 +138,111 @@ internal static class D3D11PresentHookProbe
             return false;
         }
     }
+
+    [HideFromIl2Cpp]
+    internal static bool SetPresentFrameCallback(
+        ManualLogSource logger,
+        Action callback)
+    {
+        lock (CallbackSyncRoot)
+        {
+            try
+            {
+                _managedPresentCallback =
+                    callback;
+
+                _nativePresentCallback =
+                    OnNativePresent;
+
+                var callbackPointer =
+                    Marshal.GetFunctionPointerForDelegate(
+                        _nativePresentCallback);
+
+                var result =
+                    MavrSetPresentFrameCallback(
+                        callbackPointer);
+
+                logger.LogInfo(
+                    $"[PresentHookProbe] Set frame callback " +
+                    $"result={result}, pointer=0x" +
+                    $"{callbackPointer.ToInt64():X}.");
+
+                if (result != 0)
+                {
+                    _managedPresentCallback = null;
+                    _nativePresentCallback = null;
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception exception)
+            {
+                logger.LogError(
+                    $"[PresentHookProbe] Setting frame callback failed: " +
+                    $"{exception}");
+
+                _managedPresentCallback = null;
+                _nativePresentCallback = null;
+                return false;
+            }
+        }
+    }
+
+    [HideFromIl2Cpp]
+    internal static void ClearPresentFrameCallback(
+        ManualLogSource logger)
+    {
+        lock (CallbackSyncRoot)
+        {
+            try
+            {
+                var result =
+                    MavrSetPresentFrameCallback(
+                        IntPtr.Zero);
+
+                logger.LogInfo(
+                    $"[PresentHookProbe] Clear frame callback " +
+                    $"result={result}.");
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    $"[PresentHookProbe] Clearing frame callback failed: " +
+                    $"{exception.Message}");
+            }
+            finally
+            {
+                _managedPresentCallback = null;
+                _nativePresentCallback = null;
+            }
+        }
+    }
+
+    private static void OnNativePresent()
+    {
+        try
+        {
+            _managedPresentCallback?.Invoke();
+        }
+        catch
+        {
+            // Never unwind a managed exception through IDXGISwapChain::Present.
+        }
+    }
+
+    [UnmanagedFunctionPointer(
+        CallingConvention.Cdecl)]
+    private delegate void
+        NativePresentCallbackDelegate();
+
+    [DllImport(
+        LibraryName,
+        EntryPoint = "MAVR_SetPresentFrameCallback",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int
+        MavrSetPresentFrameCallback(
+            IntPtr callback);
 
     [DllImport(
         LibraryName,

@@ -1,6 +1,7 @@
 #include <Windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 
@@ -9,7 +10,16 @@
 using PresentFunction =
     HRESULT(__stdcall*)(IDXGISwapChain*, UINT, UINT);
 
+using PresentFrameCallback =
+    void(__cdecl*)();
+
 static PresentFunction g_originalPresent = nullptr;
+
+static std::atomic<PresentFrameCallback>
+    g_presentFrameCallback = nullptr;
+
+static thread_local bool
+    g_insidePresentFrameCallback = false;
 static std::mutex g_mutex;
 
 static ID3D11Device* g_capturedDevice = nullptr;
@@ -71,6 +81,29 @@ static HRESULT __stdcall HookedPresent(
 
             device->Release();
         }
+    }
+
+    PresentFrameCallback frameCallback =
+        g_presentFrameCallback.load(
+            std::memory_order_acquire);
+
+    if (frameCallback != nullptr &&
+        !g_insidePresentFrameCallback)
+    {
+        g_insidePresentFrameCallback =
+            true;
+
+        __try
+        {
+            frameCallback();
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            // Do not allow callback failures to break the game's Present call.
+        }
+
+        g_insidePresentFrameCallback =
+            false;
     }
 
     return g_originalPresent(
@@ -209,6 +242,17 @@ static bool GetPresentAddress(
     UnregisterClassW(className, instance);
 
     return *presentAddress != nullptr;
+}
+
+extern "C" __declspec(dllexport)
+int __cdecl MAVR_SetPresentFrameCallback(
+    void* callback)
+{
+    g_presentFrameCallback.store(
+        reinterpret_cast<PresentFrameCallback>(callback),
+        std::memory_order_release);
+
+    return 0;
 }
 
 extern "C" __declspec(dllexport)

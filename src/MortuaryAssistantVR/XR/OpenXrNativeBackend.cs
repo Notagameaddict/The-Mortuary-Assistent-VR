@@ -1921,29 +1921,31 @@ internal sealed class OpenXrNativeBackend : IXrBackend
         }
 
         if (!TryRenderTestPatternToSwapchains(
-                out var acquiredIndices))
+                out var acquiredViewCount))
+        {
+            ReleaseAcquiredSwapchainImages(
+                acquiredViewCount);
+
+            return EndFrameWithoutLayers(
+                frameState.PredictedDisplayTime);
+        }
+
+        if (!ReleaseAcquiredSwapchainImages(
+                acquiredViewCount))
         {
             return EndFrameWithoutLayers(
                 frameState.PredictedDisplayTime);
         }
 
-        try
-        {
-            var endResult =
-                EndFrameWithProjectionLayer(
-                    frameState.PredictedDisplayTime,
-                    views);
+        var endResult =
+            EndFrameWithProjectionLayer(
+                frameState.PredictedDisplayTime,
+                views);
 
-            projectionSubmitted =
-                endResult == XrSuccess;
+        projectionSubmitted =
+            endResult == XrSuccess;
 
-            return endResult;
-        }
-        finally
-        {
-            ReleaseAcquiredSwapchainImages(
-                acquiredIndices);
-        }
+        return endResult;
     }
 
     [HideFromIl2Cpp]
@@ -2064,10 +2066,9 @@ internal sealed class OpenXrNativeBackend : IXrBackend
 
     [HideFromIl2Cpp]
     private bool TryRenderTestPatternToSwapchains(
-        out uint[] acquiredIndices)
+        out int acquiredViewCount)
     {
-        acquiredIndices =
-            new uint[_swapchainImageSets.Count];
+        acquiredViewCount = 0;
 
         if (_xrAcquireSwapchainImage is null ||
             _xrWaitSwapchainImage is null ||
@@ -2110,8 +2111,8 @@ internal sealed class OpenXrNativeBackend : IXrBackend
                 return false;
             }
 
-            acquiredIndices[viewIndex] =
-                imageIndex;
+            acquiredViewCount =
+                viewIndex + 1;
 
             var waitInfo =
                 new XrSwapchainImageWaitInfo
@@ -2163,16 +2164,28 @@ internal sealed class OpenXrNativeBackend : IXrBackend
     }
 
     [HideFromIl2Cpp]
-    private void ReleaseAcquiredSwapchainImages(
-        uint[] acquiredIndices)
+    private bool ReleaseAcquiredSwapchainImages(
+        int acquiredViewCount)
     {
-        if (_xrReleaseSwapchainImage is null)
+        if (acquiredViewCount <= 0)
         {
-            return;
+            return true;
         }
 
+        if (_xrReleaseSwapchainImage is null)
+        {
+            _logger.LogError(
+                "[XRBackend] xrReleaseSwapchainImage delegate " +
+                "is unavailable.");
+
+            return false;
+        }
+
+        var success =
+            true;
+
         for (var viewIndex = 0;
-             viewIndex < acquiredIndices.Length &&
+             viewIndex < acquiredViewCount &&
              viewIndex < _swapchainImageSets.Count;
              viewIndex++)
         {
@@ -2193,11 +2206,16 @@ internal sealed class OpenXrNativeBackend : IXrBackend
 
             if (result != XrSuccess)
             {
+                success =
+                    false;
+
                 _logger.LogWarning(
                     $"[XRBackend] xrReleaseSwapchainImage " +
                     $"view={viewIndex}, result={result}.");
             }
         }
+
+        return success;
     }
 
     [HideFromIl2Cpp]

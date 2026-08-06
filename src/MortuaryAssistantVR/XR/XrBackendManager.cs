@@ -9,6 +9,8 @@ internal static class XrBackendManager
     private static IXrBackend? _backend;
     private static bool _initializationAttempted;
     private static bool _updateObserved;
+    private static bool _nativePresentObserved;
+    private static ManualLogSource? _logger;
 
     [HideFromIl2Cpp]
     internal static void Initialize(
@@ -17,6 +19,9 @@ internal static class XrBackendManager
     {
         lock (SyncRoot)
         {
+            _logger =
+                logger;
+
             if (_backend is not null)
             {
                 logger.LogInfo(
@@ -51,6 +56,16 @@ internal static class XrBackendManager
                     $"[XRBackend] Name='{_backend.Name}', " +
                     $"success={success}, state={_backend.State}, " +
                     $"status='{_backend.StatusMessage}'");
+
+                if (success &&
+                    !D3D11PresentHookProbe.SetPresentFrameCallback(
+                        logger,
+                        OnNativePresentFrame))
+                {
+                    logger.LogError(
+                        "[XRBackend] Native Present frame callback " +
+                        "could not be registered.");
+                }
             }
             catch (Exception exception)
             {
@@ -96,6 +111,27 @@ internal static class XrBackendManager
         }
     }
 
+    private static void OnNativePresentFrame()
+    {
+        lock (SyncRoot)
+        {
+            if (!_nativePresentObserved)
+            {
+                _nativePresentObserved =
+                    true;
+
+                _logger?.LogInfo(
+                    "[XRBackend] First native Present frame callback " +
+                    "observed.");
+            }
+
+            if (_backend is OpenXrNativeBackend nativeBackend)
+            {
+                nativeBackend.PollUnityGraphicsDevice();
+            }
+        }
+    }
+
     [HideFromIl2Cpp]
     internal static void LogState(
         ManualLogSource logger)
@@ -132,6 +168,9 @@ internal static class XrBackendManager
             logger.LogInfo(
                 "Shutting down XR backend.");
 
+            D3D11PresentHookProbe.ClearPresentFrameCallback(
+                logger);
+
             try
             {
                 _backend.Dispose();
@@ -145,6 +184,7 @@ internal static class XrBackendManager
             finally
             {
                 _backend = null;
+                _logger = null;
             }
         }
     }
