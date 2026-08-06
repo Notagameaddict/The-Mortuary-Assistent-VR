@@ -27,7 +27,7 @@ jobs:
           cmake `
             -S minhook `
             -B minhook-build `
-            -G "Visual Studio 17 2022" `
+            -G "Visual Studio 18 2026" `
             -A x64 `
             -DBUILD_SHARED_LIBS=OFF
 
