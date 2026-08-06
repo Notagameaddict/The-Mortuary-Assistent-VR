@@ -427,3 +427,12 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# MortuaryAssistantVR local configuration and proprietary/local game references
+Directory.Build.props
+BepInEx/
+interop/
+*.log
+
+# Local release packages
+dist/

@@ -1,0 +1,13 @@
+Add these references inside the existing <ItemGroup> containing Unity references:
+
+<Reference Include="UnityEngine.AudioModule">
+  <HintPath>$(GameInteropDir)\UnityEngine.AudioModule.dll</HintPath>
+  <Private>false</Private>
+</Reference>
+
+<Reference Include="UnityEngine.UIModule">
+  <HintPath>$(GameInteropDir)\UnityEngine.UIModule.dll</HintPath>
+  <Private>false</Private>
+</Reference>
+
+No code in v0.2 currently requires these two assemblies to compile, but they are reserved for the next diagnostics step (AudioListener and Canvas inspection).

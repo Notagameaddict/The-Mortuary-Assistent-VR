@@ -1,0 +1,75 @@
+name: Build Official OpenXR Loader
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-openxr-loader:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out Khronos OpenXR SDK
+        uses: actions/checkout@v4
+        with:
+          repository: KhronosGroup/OpenXR-SDK
+          ref: release-1.1.62
+          path: openxr-sdk
+
+      - name: Configure x64 dynamic loader
+        shell: pwsh
+        run: |
+          cmake `
+            -S openxr-sdk `
+            -B openxr-build `
+            -G "Visual Studio 17 2022" `
+            -A x64 `
+            -DDYNAMIC_LOADER=ON `
+            -DBUILD_TESTS=OFF
+
+      - name: Build Release loader
+        shell: pwsh
+        run: |
+          cmake `
+            --build openxr-build `
+            --config Release `
+            --target openxr_loader
+
+      - name: Collect loader and SHA-256
+        shell: pwsh
+        run: |
+          $loader = Get-ChildItem `
+            -Path openxr-build `
+            -Filter openxr_loader.dll `
+            -Recurse |
+            Select-Object -First 1
+
+          if ($null -eq $loader) {
+            throw "openxr_loader.dll was not found after the build."
+          }
+
+          New-Item artifact -ItemType Directory -Force | Out-Null
+          Copy-Item $loader.FullName artifact\openxr_loader.dll -Force
+
+          $hash = Get-FileHash `
+            artifact\openxr_loader.dll `
+            -Algorithm SHA256
+
+          "$($hash.Hash)  openxr_loader.dll" |
+            Set-Content `
+              artifact\openxr_loader.dll.sha256.txt `
+              -Encoding ASCII
+
+          Write-Host "Built loader:"
+          Write-Host $loader.FullName
+          Write-Host "SHA-256: $($hash.Hash)"
+
+      - name: Upload loader artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openxr-loader-windows-x64-1.1.62
+          path: artifact
+          if-no-files-found: error
+          retention-days: 14

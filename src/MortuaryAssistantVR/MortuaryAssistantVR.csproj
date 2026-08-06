@@ -1,0 +1,66 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>MortuaryAssistantVR</AssemblyName>
+    <RootNamespace>MortuaryAssistantVR</RootNamespace>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Version>0.1.0</Version>
+    <DebugType>portable</DebugType>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <GameCoreDir>$(MortuaryAssistantDir)\BepInEx\core</GameCoreDir>
+    <GameInteropDir>$(MortuaryAssistantDir)\BepInEx\interop</GameInteropDir>
+    <PluginDeployDir>$(MortuaryAssistantDir)\BepInEx\plugins\MortuaryAssistantVR</PluginDeployDir>
+  </PropertyGroup>
+
+  <Target Name="ValidateGamePath" BeforeTargets="ResolveReferences">
+    <Error Condition="'$(MortuaryAssistantDir)' == ''"
+           Text="MortuaryAssistantDir is not configured. Copy Directory.Build.props.example to Directory.Build.props and edit the path." />
+    <Error Condition="!Exists('$(GameCoreDir)\BepInEx.Core.dll')"
+           Text="BepInEx.Core.dll was not found. Check MortuaryAssistantDir and confirm BepInEx IL2CPP is installed." />
+    <Error Condition="!Exists('$(GameInteropDir)\UnityEngine.CoreModule.dll')"
+           Text="Unity interop assemblies were not found. Start the game once with BepInEx installed." />
+  </Target>
+
+  <ItemGroup>
+    <Reference Include="BepInEx.Core">
+      <HintPath>$(GameCoreDir)\BepInEx.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="BepInEx.Unity.IL2CPP">
+      <HintPath>$(GameCoreDir)\BepInEx.Unity.IL2CPP.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Il2CppInterop.Runtime">
+      <HintPath>$(GameCoreDir)\Il2CppInterop.Runtime.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(GameInteropDir)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.SceneManagementModule">
+      <HintPath>$(GameInteropDir)\UnityEngine.SceneManagementModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.XRModule">
+      <HintPath>$(GameInteropDir)\UnityEngine.XRModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Il2Cppmscorlib">
+  <HintPath>$(GameInteropDir)\Il2Cppmscorlib.dll</HintPath>
+  <Private>false</Private>
+</Reference>
+  </ItemGroup>
+
+  <Target Name="DeployPlugin" AfterTargets="Build" Condition="'$(DeployToGame)' == 'true'">
+    <MakeDir Directories="$(PluginDeployDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDeployDir)" />
+    <Message Importance="high" Text="Deployed $(TargetFileName) to $(PluginDeployDir)" />
+  </Target>
+</Project>

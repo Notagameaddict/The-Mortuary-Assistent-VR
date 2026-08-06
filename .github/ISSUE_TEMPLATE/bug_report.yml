@@ -1,0 +1,40 @@
+name: Bug report
+description: Report a reproducible problem
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: input
+    id: game-version
+    attributes:
+      label: Game version
+    validations:
+      required: true
+  - type: input
+    id: bepinex-version
+    attributes:
+      label: BepInEx version
+    validations:
+      required: true
+  - type: input
+    id: headset
+    attributes:
+      label: Headset and OpenXR runtime
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Actual result
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log excerpt
+      description: Remove private filesystem paths if desired.
