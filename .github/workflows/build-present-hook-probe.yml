@@ -1,0 +1,66 @@
+name: Build D3D11 Present Hook Probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out mod repository
+        uses: actions/checkout@v4
+
+      - name: Check out MinHook
+        uses: actions/checkout@v4
+        with:
+          repository: TsudaKageyu/minhook
+          ref: v1.3.4
+          path: minhook
+
+      - name: Configure and build MinHook
+        shell: pwsh
+        run: |
+          cmake `
+            -S minhook `
+            -B minhook-build `
+            -G "Visual Studio 17 2022" `
+            -A x64 `
+            -DBUILD_SHARED_LIBS=OFF
+
+          cmake `
+            --build minhook-build `
+            --config Release
+
+      - name: Build probe DLL
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSINSTALL=%%i"
+
+          if not defined VSINSTALL exit /b 1
+
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
+          if errorlevel 1 exit /b 1
+
+          if not exist artifact mkdir artifact
+
+          cl /nologo /LD /EHsc /std:c++17 ^
+            /I "minhook\include" ^
+            "native\PresentHookProbe\PresentHookProbe.cpp" ^
+            "minhook-build\Release\minhook.lib" ^
+            d3d11.lib dxgi.lib user32.lib ^
+            /link ^
+            /OUT:"artifact\MortuaryAssistantVR.PresentHookProbe.dll"
+
+          if errorlevel 1 exit /b 1
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mortuary-assistant-vr-present-hook-probe
+          path: artifact
+          if-no-files-found: error
+          retention-days: 14
