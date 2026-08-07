@@ -10,6 +10,7 @@ internal static class D3D11PresentHookProbe
 
     private static Action? _managedPresentCallback;
     private static NativePresentCallbackDelegate? _nativePresentCallback;
+    private static volatile bool _stereoSourceTexturesReady;
 
     private const string LibraryName =
         "MortuaryAssistantVR.PresentHookProbe";
@@ -84,6 +85,113 @@ internal static class D3D11PresentHookProbe
         {
             logger.LogError(
                 $"[PresentHookProbe] Query failed: {exception}");
+
+            return false;
+        }
+    }
+
+    internal static bool StereoSourceTexturesReady =>
+        _stereoSourceTexturesReady;
+
+    [HideFromIl2Cpp]
+    internal static bool SetStereoSourceTextures(
+        ManualLogSource logger,
+        IntPtr leftTexture,
+        IntPtr rightTexture)
+    {
+        try
+        {
+            var result =
+                MavrSetStereoSourceTextures(
+                    leftTexture,
+                    rightTexture);
+
+            _stereoSourceTexturesReady =
+                result == 0 &&
+                leftTexture != IntPtr.Zero &&
+                rightTexture != IntPtr.Zero;
+
+            logger.LogInfo(
+                $"[PresentHookProbe] Set stereo sources " +
+                $"result={result}, " +
+                $"left=0x{leftTexture.ToInt64():X}, " +
+                $"right=0x{rightTexture.ToInt64():X}.");
+
+            return _stereoSourceTexturesReady;
+        }
+        catch (Exception exception)
+        {
+            _stereoSourceTexturesReady =
+                false;
+
+            logger.LogError(
+                $"[PresentHookProbe] Setting stereo sources failed: " +
+                $"{exception}");
+
+            return false;
+        }
+    }
+
+    [HideFromIl2Cpp]
+    internal static void ClearStereoSourceTextures(
+        ManualLogSource logger)
+    {
+        try
+        {
+            var result =
+                MavrSetStereoSourceTextures(
+                    IntPtr.Zero,
+                    IntPtr.Zero);
+
+            logger.LogInfo(
+                $"[PresentHookProbe] Clear stereo sources " +
+                $"result={result}.");
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                $"[PresentHookProbe] Clearing stereo sources failed: " +
+                $"{exception.Message}");
+        }
+        finally
+        {
+            _stereoSourceTexturesReady =
+                false;
+        }
+    }
+
+    [HideFromIl2Cpp]
+    internal static bool BlitStereoSourceTexture(
+        ManualLogSource logger,
+        int eyeIndex,
+        IntPtr destinationTexture,
+        long destinationDxgiFormat)
+    {
+        try
+        {
+            var result =
+                MavrBlitStereoSourceTexture(
+                    eyeIndex,
+                    destinationTexture,
+                    destinationDxgiFormat,
+                    out var nativeHResult);
+
+            if (result != 0)
+            {
+                logger.LogError(
+                    $"[PresentHookProbe] Stereo blit failed: " +
+                    $"eye={eyeIndex}, result={result}, hresult=0x" +
+                    $"{unchecked((uint)nativeHResult):X8}.");
+
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(
+                $"[PresentHookProbe] Stereo blit threw: {exception}");
 
             return false;
         }
@@ -308,6 +416,26 @@ internal static class D3D11PresentHookProbe
             out uint adapterLuidLowPart,
             out int adapterLuidHighPart,
             out int featureLevel);
+
+    [DllImport(
+        LibraryName,
+        EntryPoint = "MAVR_SetStereoSourceTextures",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int
+        MavrSetStereoSourceTextures(
+            IntPtr leftTexture,
+            IntPtr rightTexture);
+
+    [DllImport(
+        LibraryName,
+        EntryPoint = "MAVR_BlitStereoSourceTexture",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int
+        MavrBlitStereoSourceTexture(
+            int eyeIndex,
+            IntPtr destinationTexture,
+            long destinationDxgiFormat,
+            out int nativeHResult);
 
     [DllImport(
         LibraryName,

@@ -53,6 +53,9 @@ public sealed class RuntimeBehaviour : MonoBehaviour
             XrBackendManager.Initialize(
                 _logger,
                 ModConfig.AttemptXrStartup.Value);
+
+            HeadTrackingPatch.Install(
+                _logger);
         }
 
         var activeScene =
@@ -135,6 +138,8 @@ public sealed class RuntimeBehaviour : MonoBehaviour
 
         if (!isGameplayScene)
         {
+            StereoCameraRig.Reset();
+
             _logger.LogInfo(
                 $"Gameplay camera work skipped scene '{sceneName}'.");
 
@@ -163,6 +168,9 @@ public sealed class RuntimeBehaviour : MonoBehaviour
             XrRigBootstrap.TryCreate(
                 _logger,
                 sceneName);
+
+            StereoCameraRig.TryCreate(
+                _logger);
         }
 
         XrBackendManager.LogState(

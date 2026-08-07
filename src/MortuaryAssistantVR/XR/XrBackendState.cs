@@ -17,9 +17,10 @@ internal enum XrBackendState
     SwapchainImagesReady = 12,
     WaitingForSessionReady = 13,
     SessionRunning = 14,
-    TestPatternRendering = 15,
-    InstanceCreationFailed = 16,
-    SessionCreationFailed = 17,
-    Failed = 18,
-    Disposed = 19
+    CinemaQuadRendering = 15,
+    StereoPrototypeRendering = 16,
+    InstanceCreationFailed = 17,
+    SessionCreationFailed = 19,
+    Failed = 19,
+    Disposed = 20
 }

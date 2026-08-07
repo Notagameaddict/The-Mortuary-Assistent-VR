@@ -23,6 +23,7 @@ internal sealed class OpenXrNativeBackend : IXrBackend
     private const int XrTypeEventDataSessionStateChanged = 18;
     private const int XrTypeFrameWaitInfo = 33;
     private const int XrTypeCompositionLayerProjection = 35;
+    private const int XrTypeCompositionLayerQuad = 36;
     private const int XrTypeReferenceSpaceCreateInfo = 37;
     private const int XrTypeViewConfigurationView = 41;
     private const int XrTypeFrameState = 44;
@@ -39,6 +40,11 @@ internal sealed class OpenXrNativeBackend : IXrBackend
     private const int XrViewConfigurationTypePrimaryStereo = 2;
     private const int XrReferenceSpaceTypeLocal = 2;
     private const int XrEnvironmentBlendModeOpaque = 1;
+    private const int XrEyeVisibilityBoth = 0;
+
+    private const float CinemaQuadDistanceMetres = 2.0f;
+    private const float CinemaQuadWidthMetres = 2.4f;
+    private const float CinemaQuadHeightMetres = 1.35f;
 
     private const ulong XrSwapchainUsageColorAttachmentBit = 0x00000001;
     private const ulong XrSwapchainUsageSampledBit = 0x00000020;
@@ -117,6 +123,9 @@ internal sealed class OpenXrNativeBackend : IXrBackend
     private int _sessionState = XrSessionStateUnknown;
     private int _presentHookPollCount;
     private int _frameCount;
+    private long _headPoseSequence;
+    private OpenXrHeadPose _latestHeadPose;
+    private bool _hasHeadPose;
 
     internal OpenXrNativeBackend(ManualLogSource logger)
     {
@@ -1863,11 +1872,22 @@ internal sealed class OpenXrNativeBackend : IXrBackend
         if (renderResult == XrSuccess &&
             projectionSubmitted)
         {
-            State =
-                XrBackendState.TestPatternRendering;
+            if (D3D11PresentHookProbe.StereoSourceTexturesReady)
+            {
+                State =
+                    XrBackendState.StereoPrototypeRendering;
 
-            StatusMessage =
-                "OpenXR desktop-mirror projection is active.";
+                StatusMessage =
+                    "OpenXR stereo camera prototype is active.";
+            }
+            else
+            {
+                State =
+                    XrBackendState.CinemaQuadRendering;
+
+                StatusMessage =
+                    "OpenXR head-locked cinema quad is active.";
+            }
         }
     }
 
@@ -1920,7 +1940,11 @@ internal sealed class OpenXrNativeBackend : IXrBackend
                 frameState.PredictedDisplayTime);
         }
 
-        if (!TryRenderTestPatternToSwapchains(
+        var stereoRendering =
+            D3D11PresentHookProbe.StereoSourceTexturesReady;
+
+        if (!TryRenderOutputToSwapchains(
+                stereoRendering,
                 out var acquiredViewCount))
         {
             ReleaseAcquiredSwapchainImages(
@@ -1938,9 +1962,12 @@ internal sealed class OpenXrNativeBackend : IXrBackend
         }
 
         var endResult =
-            EndFrameWithProjectionLayer(
-                frameState.PredictedDisplayTime,
-                views);
+            stereoRendering
+                ? EndFrameWithProjectionLayer(
+                    frameState.PredictedDisplayTime,
+                    views)
+                : EndFrameWithCinemaQuad(
+                    frameState.PredictedDisplayTime);
 
         projectionSubmitted =
             endResult == XrSuccess;
@@ -2055,6 +2082,9 @@ internal sealed class OpenXrNativeBackend : IXrBackend
                             viewIndex * viewSize));
             }
 
+            StoreLatestHeadPose(
+                views);
+
             return true;
         }
         finally
@@ -2065,7 +2095,8 @@ internal sealed class OpenXrNativeBackend : IXrBackend
     }
 
     [HideFromIl2Cpp]
-    private bool TryRenderTestPatternToSwapchains(
+    private bool TryRenderOutputToSwapchains(
+        bool stereoRendering,
         out int acquiredViewCount)
     {
         acquiredViewCount = 0;
@@ -2073,13 +2104,20 @@ internal sealed class OpenXrNativeBackend : IXrBackend
         if (_xrAcquireSwapchainImage is null ||
             _xrWaitSwapchainImage is null ||
             _xrReleaseSwapchainImage is null ||
-            _swapchainImageSets.Count != 2)
+            _swapchainImageSets.Count < 1)
         {
             return false;
         }
 
+        var requiredViewCount =
+            stereoRendering
+                ? Math.Min(
+                    2,
+                    _swapchainImageSets.Count)
+                : 1;
+
         for (var viewIndex = 0;
-             viewIndex < _swapchainImageSets.Count;
+             viewIndex < requiredViewCount;
              viewIndex++)
         {
             var imageSet =
@@ -2144,10 +2182,19 @@ internal sealed class OpenXrNativeBackend : IXrBackend
                 imageSet.Textures[
                     checked((int)imageIndex)];
 
-            if (!D3D11PresentHookProbe.BlitCapturedBackBuffer(
-                    _logger,
-                    texture,
-                    imageSet.Format))
+            var blitSucceeded =
+                stereoRendering
+                    ? D3D11PresentHookProbe.BlitStereoSourceTexture(
+                        _logger,
+                        viewIndex,
+                        texture,
+                        imageSet.Format)
+                    : D3D11PresentHookProbe.BlitCapturedBackBuffer(
+                        _logger,
+                        texture,
+                        imageSet.Format);
+
+            if (!blitSucceeded)
             {
                 return false;
             }
@@ -2212,13 +2259,59 @@ internal sealed class OpenXrNativeBackend : IXrBackend
     }
 
     [HideFromIl2Cpp]
+    internal bool TryGetLatestHeadPose(
+        out OpenXrHeadPose headPose)
+    {
+        headPose =
+            _latestHeadPose;
+
+        return _hasHeadPose;
+    }
+
+    [HideFromIl2Cpp]
+    private void StoreLatestHeadPose(
+        XrView[] views)
+    {
+        if (views.Length < 1)
+        {
+            return;
+        }
+
+        // Both eye views carry the same head orientation. Their positions
+        // differ by the IPD, so use the midpoint for the head position.
+        var left =
+            views[0].Pose;
+
+        var right =
+            views.Length > 1
+                ? views[1].Pose
+                : views[0].Pose;
+
+        _headPoseSequence++;
+
+        _latestHeadPose =
+            new OpenXrHeadPose(
+                (left.Position.X + right.Position.X) * 0.5f,
+                (left.Position.Y + right.Position.Y) * 0.5f,
+                (left.Position.Z + right.Position.Z) * 0.5f,
+                left.Orientation.X,
+                left.Orientation.Y,
+                left.Orientation.Z,
+                left.Orientation.W,
+                _headPoseSequence);
+
+        _hasHeadPose =
+            true;
+    }
+
+    [HideFromIl2Cpp]
     private int EndFrameWithProjectionLayer(
         long displayTime,
         XrView[] views)
     {
         if (_xrEndFrame is null ||
-            views.Length != 2 ||
-            _swapchainImageSets.Count != 2)
+            views.Length < 2 ||
+            _swapchainImageSets.Count < 2)
         {
             return -1;
         }
@@ -2381,6 +2474,156 @@ internal sealed class OpenXrNativeBackend : IXrBackend
 
             Marshal.FreeHGlobal(
                 projectionViewsPointer);
+        }
+    }
+
+    [HideFromIl2Cpp]
+    private int EndFrameWithCinemaQuad(
+        long displayTime)
+    {
+        if (_xrEndFrame is null ||
+            _swapchainImageSets.Count < 1)
+        {
+            return -1;
+        }
+
+        var imageSet =
+            _swapchainImageSets[0];
+
+        var quad =
+            new XrCompositionLayerQuad
+            {
+                Type =
+                    XrTypeCompositionLayerQuad,
+
+                Next =
+                    IntPtr.Zero,
+
+                LayerFlags =
+                    0,
+
+                Space =
+                    _localSpace,
+
+                EyeVisibility =
+                    XrEyeVisibilityBoth,
+
+                SubImage =
+                    new XrSwapchainSubImage
+                    {
+                        Swapchain =
+                            imageSet.Swapchain,
+
+                        ImageRect =
+                            new XrRect2Di
+                            {
+                                Offset =
+                                    new XrOffset2Di
+                                    {
+                                        X = 0,
+                                        Y = 0
+                                    },
+
+                                Extent =
+                                    new XrExtent2Di
+                                    {
+                                        Width =
+                                            checked((int)imageSet.Width),
+
+                                        Height =
+                                            checked((int)imageSet.Height)
+                                    }
+                            },
+
+                        ImageArrayIndex =
+                            0
+                    },
+
+                Pose =
+                    new XrPosef
+                    {
+                        Orientation =
+                            new XrQuaternionf
+                            {
+                                X = 0,
+                                Y = 0,
+                                Z = 0,
+                                W = 1
+                            },
+
+                        Position =
+                            new XrVector3f
+                            {
+                                X = 0,
+                                Y = 0,
+                                Z =
+                                    -CinemaQuadDistanceMetres
+                            }
+                    },
+
+                Size =
+                    new XrExtent2Df
+                    {
+                        Width =
+                            CinemaQuadWidthMetres,
+
+                        Height =
+                            CinemaQuadHeightMetres
+                    }
+            };
+
+        var layerPointer =
+            Marshal.AllocHGlobal(
+                Marshal.SizeOf<XrCompositionLayerQuad>());
+
+        var layersPointer =
+            Marshal.AllocHGlobal(
+                IntPtr.Size);
+
+        try
+        {
+            Marshal.StructureToPtr(
+                quad,
+                layerPointer,
+                false);
+
+            Marshal.WriteIntPtr(
+                layersPointer,
+                layerPointer);
+
+            var endInfo =
+                new XrFrameEndInfo
+                {
+                    Type =
+                        XrTypeFrameEndInfo,
+
+                    Next =
+                        IntPtr.Zero,
+
+                    DisplayTime =
+                        displayTime,
+
+                    EnvironmentBlendMode =
+                        XrEnvironmentBlendModeOpaque,
+
+                    LayerCount =
+                        1,
+
+                    Layers =
+                        layersPointer
+                };
+
+            return _xrEndFrame(
+                _session,
+                ref endInfo);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(
+                layersPointer);
+
+            Marshal.FreeHGlobal(
+                layerPointer);
         }
     }
 
@@ -3097,6 +3340,26 @@ internal sealed class OpenXrNativeBackend : IXrBackend
     {
         public int Type;
         public IntPtr Next;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrCompositionLayerQuad
+    {
+        public int Type;
+        public IntPtr Next;
+        public ulong LayerFlags;
+        public ulong Space;
+        public int EyeVisibility;
+        public XrSwapchainSubImage SubImage;
+        public XrPosef Pose;
+        public XrExtent2Df Size;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XrExtent2Df
+    {
+        public float Width;
+        public float Height;
     }
 
     [StructLayout(LayoutKind.Sequential)]
