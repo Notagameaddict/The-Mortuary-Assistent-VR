@@ -93,14 +93,7 @@ static HRESULT __stdcall HookedPresent(
         g_insidePresentFrameCallback =
             true;
 
-        __try
-        {
-            frameCallback();
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            // Do not allow callback failures to break the game's Present call.
-        }
+        frameCallback();
 
         g_insidePresentFrameCallback =
             false;
