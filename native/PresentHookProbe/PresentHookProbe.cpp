@@ -376,51 +376,6 @@ cbuffer CursorBuffer : register(b0)
     float interactionVisible;
 };
 
-float HandShape(float2 uv)
-{
-    float2 p =
-        (uv - float2(0.5, 0.5)) *
-        float2(1.0, 1.7778);
-
-    float palm =
-        step(
-            length(
-                (p - float2(0.0, -0.005)) /
-                float2(0.018, 0.025)),
-            1.0);
-
-    float finger1 =
-        step(abs(p.x + 0.020), 0.0045) *
-        step(abs(p.y - 0.019), 0.025);
-
-    float finger2 =
-        step(abs(p.x + 0.007), 0.0045) *
-        step(abs(p.y - 0.025), 0.031);
-
-    float finger3 =
-        step(abs(p.x - 0.006), 0.0045) *
-        step(abs(p.y - 0.023), 0.029);
-
-    float finger4 =
-        step(abs(p.x - 0.019), 0.0045) *
-        step(abs(p.y - 0.016), 0.022);
-
-    float thumb =
-        step(
-            length(
-                (p - float2(-0.025, -0.004)) /
-                float2(0.014, 0.007)),
-            1.0);
-
-    return saturate(
-        palm +
-        finger1 +
-        finger2 +
-        finger3 +
-        finger4 +
-        thumb);
-}
-
 float4 DrawInteraction(
     float4 color,
     float2 uv)
@@ -430,26 +385,88 @@ float4 DrawInteraction(
         return color;
     }
 
-    float hand =
-        HandShape(uv);
+    float2 p =
+        (uv - float2(0.5, 0.5)) *
+        float2(1.0, 1.7778);
+
+    float radius =
+        length(p);
+
+    float outerRing =
+        1.0 -
+        smoothstep(
+            0.020,
+            0.023,
+            radius);
+
+    float innerCutout =
+        1.0 -
+        smoothstep(
+            0.012,
+            0.015,
+            radius);
+
+    float ring =
+        saturate(
+            outerRing -
+            innerCutout);
+
+    float centreDot =
+        1.0 -
+        smoothstep(
+            0.0025,
+            0.0045,
+            radius);
+
+    float horizontal =
+        (1.0 -
+         smoothstep(
+             0.0015,
+             0.0030,
+             abs(p.y))) *
+        (1.0 -
+         smoothstep(
+             0.010,
+             0.020,
+             abs(p.x)));
+
+    float vertical =
+        (1.0 -
+         smoothstep(
+             0.0015,
+             0.0030,
+             abs(p.x))) *
+        (1.0 -
+         smoothstep(
+             0.010,
+             0.020,
+             abs(p.y)));
+
+    float reticle =
+        saturate(
+            ring +
+            centreDot +
+            horizontal +
+            vertical);
 
     float outline =
-        HandShape(
-            float2(0.5, 0.5) +
-            (uv - float2(0.5, 0.5)) *
-            0.88);
+        1.0 -
+        smoothstep(
+            0.024,
+            0.028,
+            radius);
 
     color.rgb =
         lerp(
             color.rgb,
             float3(0.0, 0.0, 0.0),
-            outline);
+            outline * 0.85);
 
     color.rgb =
         lerp(
             color.rgb,
             float3(1.0, 1.0, 1.0),
-            hand);
+            reticle);
 
     return color;
 }
@@ -521,51 +538,6 @@ cbuffer CursorBuffer : register(b0)
     float interactionVisible;
 };
 
-float HandShape(float2 uv)
-{
-    float2 p =
-        (uv - float2(0.5, 0.5)) *
-        float2(1.0, 1.7778);
-
-    float palm =
-        step(
-            length(
-                (p - float2(0.0, -0.005)) /
-                float2(0.018, 0.025)),
-            1.0);
-
-    float finger1 =
-        step(abs(p.x + 0.020), 0.0045) *
-        step(abs(p.y - 0.019), 0.025);
-
-    float finger2 =
-        step(abs(p.x + 0.007), 0.0045) *
-        step(abs(p.y - 0.025), 0.031);
-
-    float finger3 =
-        step(abs(p.x - 0.006), 0.0045) *
-        step(abs(p.y - 0.023), 0.029);
-
-    float finger4 =
-        step(abs(p.x - 0.019), 0.0045) *
-        step(abs(p.y - 0.016), 0.022);
-
-    float thumb =
-        step(
-            length(
-                (p - float2(-0.025, -0.004)) /
-                float2(0.014, 0.007)),
-            1.0);
-
-    return saturate(
-        palm +
-        finger1 +
-        finger2 +
-        finger3 +
-        finger4 +
-        thumb);
-}
-
 float4 DrawInteraction(
     float4 color,
     float2 uv)
@@ -575,26 +547,88 @@ float4 DrawInteraction(
         return color;
     }
 
-    float hand =
-        HandShape(uv);
+    float2 p =
+        (uv - float2(0.5, 0.5)) *
+        float2(1.0, 1.7778);
+
+    float radius =
+        length(p);
+
+    float outerRing =
+        1.0 -
+        smoothstep(
+            0.020,
+            0.023,
+            radius);
+
+    float innerCutout =
+        1.0 -
+        smoothstep(
+            0.012,
+            0.015,
+            radius);
+
+    float ring =
+        saturate(
+            outerRing -
+            innerCutout);
+
+    float centreDot =
+        1.0 -
+        smoothstep(
+            0.0025,
+            0.0045,
+            radius);
+
+    float horizontal =
+        (1.0 -
+         smoothstep(
+             0.0015,
+             0.0030,
+             abs(p.y))) *
+        (1.0 -
+         smoothstep(
+             0.010,
+             0.020,
+             abs(p.x)));
+
+    float vertical =
+        (1.0 -
+         smoothstep(
+             0.0015,
+             0.0030,
+             abs(p.x))) *
+        (1.0 -
+         smoothstep(
+             0.010,
+             0.020,
+             abs(p.y)));
+
+    float reticle =
+        saturate(
+            ring +
+            centreDot +
+            horizontal +
+            vertical);
 
     float outline =
-        HandShape(
-            float2(0.5, 0.5) +
-            (uv - float2(0.5, 0.5)) *
-            0.88);
+        1.0 -
+        smoothstep(
+            0.024,
+            0.028,
+            radius);
 
     color.rgb =
         lerp(
             color.rgb,
             float3(0.0, 0.0, 0.0),
-            outline);
+            outline * 0.85);
 
     color.rgb =
         lerp(
             color.rgb,
             float3(1.0, 1.0, 1.0),
-            hand);
+            reticle);
 
     return color;
 }
