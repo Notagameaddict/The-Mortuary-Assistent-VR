@@ -182,11 +182,6 @@ public sealed class RuntimeBehaviour : MonoBehaviour
         ShutdownRuntime();
     }
 
-    public void OnDestroy()
-    {
-        ShutdownRuntime();
-    }
-
     [HideFromIl2Cpp]
     private void ShutdownRuntime()
     {

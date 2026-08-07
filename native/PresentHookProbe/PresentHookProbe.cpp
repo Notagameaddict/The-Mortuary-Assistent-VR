@@ -25,6 +25,7 @@ static std::mutex g_mutex;
 
 static ID3D11Device* g_capturedDevice = nullptr;
 static IDXGISwapChain* g_capturedSwapChain = nullptr;
+static HWND g_capturedWindow = nullptr;
 
 static std::mutex g_stereoSourceMutex;
 static ID3D11Texture2D* g_leftEyeSourceTexture = nullptr;
@@ -35,6 +36,15 @@ static ID3D11VertexShader* g_blitVertexShader = nullptr;
 static ID3D11PixelShader* g_blitPixelShader = nullptr;
 static ID3D11PixelShader* g_blitPixelShaderFlipped = nullptr;
 static ID3D11SamplerState* g_blitSampler = nullptr;
+static ID3D11Buffer* g_cursorConstantBuffer = nullptr;
+
+struct CursorConstants
+{
+    float CursorX;
+    float CursorY;
+    float CursorVisible;
+    float Padding;
+};
 static LUID g_adapterLuid = {};
 static D3D_FEATURE_LEVEL g_featureLevel =
     static_cast<D3D_FEATURE_LEVEL>(0);
@@ -79,6 +89,16 @@ static HRESULT __stdcall HookedPresent(
 
                         g_capturedSwapChain = swapChain;
                         g_capturedSwapChain->AddRef();
+
+                        DXGI_SWAP_CHAIN_DESC swapChainDescription = {};
+
+                        if (SUCCEEDED(
+                                swapChain->GetDesc(
+                                    &swapChainDescription)))
+                        {
+                            g_capturedWindow =
+                                swapChainDescription.OutputWindow;
+                        }
 
                         g_adapterLuid =
                             description.AdapterLuid;
@@ -276,6 +296,12 @@ static DXGI_FORMAT NormalizeShaderResourceFormat(
 
 static void ReleaseBlitResources()
 {
+    if (g_cursorConstantBuffer != nullptr)
+    {
+        g_cursorConstantBuffer->Release();
+        g_cursorConstantBuffer = nullptr;
+    }
+
     if (g_blitSampler != nullptr)
     {
         g_blitSampler->Release();
@@ -319,7 +345,8 @@ static HRESULT EnsureBlitResources(
         g_blitVertexShader != nullptr &&
         g_blitPixelShader != nullptr &&
         g_blitPixelShaderFlipped != nullptr &&
-        g_blitSampler != nullptr)
+        g_blitSampler != nullptr &&
+        g_cursorConstantBuffer != nullptr)
     {
         return S_OK;
     }
@@ -340,18 +367,46 @@ static HRESULT EnsureBlitResources(
     static const char* pixelShaderSource =
         "Texture2D sourceTexture : register(t0);"
         "SamplerState sourceSampler : register(s0);"
+        "cbuffer CursorBuffer : register(b0) {"
+        "float2 cursorUv; float cursorVisible; float padding;"
+        "};"
+        "float4 DrawCursor(float4 color, float2 uv) {"
+        "if (cursorVisible < 0.5) return color;"
+        "float2 d = abs(uv - cursorUv);"
+        "float cross = step(d.x, 0.0025) * step(d.y, 0.018) + "
+        "step(d.y, 0.0025) * step(d.x, 0.018);"
+        "float outline = step(d.x, 0.0045) * step(d.y, 0.021) + "
+        "step(d.y, 0.0045) * step(d.x, 0.021);"
+        "color.rgb = lerp(color.rgb, float3(0,0,0), saturate(outline));"
+        "color.rgb = lerp(color.rgb, float3(1,1,1), saturate(cross));"
+        "return color;"
+        "}"
         "float4 main(float4 position : SV_POSITION, "
         "float2 uv : TEXCOORD0) : SV_TARGET {"
-        "return sourceTexture.Sample(sourceSampler, uv);"
+        "return DrawCursor(sourceTexture.Sample(sourceSampler, uv), uv);"
         "}";
 
     static const char* flippedPixelShaderSource =
         "Texture2D sourceTexture : register(t0);"
         "SamplerState sourceSampler : register(s0);"
+        "cbuffer CursorBuffer : register(b0) {"
+        "float2 cursorUv; float cursorVisible; float padding;"
+        "};"
+        "float4 DrawCursor(float4 color, float2 uv) {"
+        "if (cursorVisible < 0.5) return color;"
+        "float2 d = abs(uv - cursorUv);"
+        "float cross = step(d.x, 0.0025) * step(d.y, 0.018) + "
+        "step(d.y, 0.0025) * step(d.x, 0.018);"
+        "float outline = step(d.x, 0.0045) * step(d.y, 0.021) + "
+        "step(d.y, 0.0045) * step(d.x, 0.021);"
+        "color.rgb = lerp(color.rgb, float3(0,0,0), saturate(outline));"
+        "color.rgb = lerp(color.rgb, float3(1,1,1), saturate(cross));"
+        "return color;"
+        "}"
         "float4 main(float4 position : SV_POSITION, "
         "float2 uv : TEXCOORD0) : SV_TARGET {"
-        "uv.y = 1.0 - uv.y;"
-        "return sourceTexture.Sample(sourceSampler, uv);"
+        "float2 sampleUv = float2(uv.x, 1.0 - uv.y);"
+        "return DrawCursor(sourceTexture.Sample(sourceSampler, sampleUv), uv);"
         "}";
 
     ID3DBlob* vertexBlob = nullptr;
@@ -497,10 +552,101 @@ static HRESULT EnsureBlitResources(
         return result;
     }
 
+    D3D11_BUFFER_DESC cursorBufferDescription = {};
+    cursorBufferDescription.ByteWidth =
+        sizeof(CursorConstants);
+    cursorBufferDescription.Usage =
+        D3D11_USAGE_DYNAMIC;
+    cursorBufferDescription.BindFlags =
+        D3D11_BIND_CONSTANT_BUFFER;
+    cursorBufferDescription.CPUAccessFlags =
+        D3D11_CPU_ACCESS_WRITE;
+
+    result =
+        device->CreateBuffer(
+            &cursorBufferDescription,
+            nullptr,
+            &g_cursorConstantBuffer);
+
+    if (FAILED(result))
+    {
+        ReleaseBlitResources();
+        return result;
+    }
+
     g_blitDevice = device;
     g_blitDevice->AddRef();
 
     return S_OK;
+}
+
+static CursorConstants GetCursorConstants()
+{
+    CursorConstants constants = {};
+    constants.CursorX = 0.5f;
+    constants.CursorY = 0.5f;
+    constants.CursorVisible = 0.0f;
+
+    CURSORINFO cursorInfo = {};
+    cursorInfo.cbSize = sizeof(CURSORINFO);
+
+    if (!GetCursorInfo(&cursorInfo) ||
+        (cursorInfo.flags & CURSOR_SHOWING) == 0 ||
+        g_capturedWindow == nullptr)
+    {
+        return constants;
+    }
+
+    POINT point =
+        cursorInfo.ptScreenPos;
+
+    if (!ScreenToClient(
+            g_capturedWindow,
+            &point))
+    {
+        return constants;
+    }
+
+    RECT clientRectangle = {};
+
+    if (!GetClientRect(
+            g_capturedWindow,
+            &clientRectangle))
+    {
+        return constants;
+    }
+
+    const int width =
+        clientRectangle.right -
+        clientRectangle.left;
+
+    const int height =
+        clientRectangle.bottom -
+        clientRectangle.top;
+
+    if (width <= 0 ||
+        height <= 0)
+    {
+        return constants;
+    }
+
+    constants.CursorX =
+        static_cast<float>(point.x) /
+        static_cast<float>(width);
+
+    constants.CursorY =
+        static_cast<float>(point.y) /
+        static_cast<float>(height);
+
+    constants.CursorVisible =
+        constants.CursorX >= 0.0f &&
+        constants.CursorX <= 1.0f &&
+        constants.CursorY >= 0.0f &&
+        constants.CursorY <= 1.0f
+            ? 1.0f
+            : 0.0f;
+
+    return constants;
 }
 
 static int BlitTextureToDestination(
@@ -698,6 +844,34 @@ static int BlitTextureToDestination(
         0,
         1,
         &g_blitSampler);
+
+    const CursorConstants cursorConstants =
+        GetCursorConstants();
+
+    D3D11_MAPPED_SUBRESOURCE mappedCursorBuffer = {};
+
+    if (SUCCEEDED(
+            context->Map(
+                g_cursorConstantBuffer,
+                0,
+                D3D11_MAP_WRITE_DISCARD,
+                0,
+                &mappedCursorBuffer)))
+    {
+        memcpy(
+            mappedCursorBuffer.pData,
+            &cursorConstants,
+            sizeof(CursorConstants));
+
+        context->Unmap(
+            g_cursorConstantBuffer,
+            0);
+    }
+
+    context->PSSetConstantBuffers(
+        0,
+        1,
+        &g_cursorConstantBuffer);
 
     context->Draw(
         3,

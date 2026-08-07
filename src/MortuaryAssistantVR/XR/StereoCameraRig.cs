@@ -18,6 +18,10 @@ internal static class StereoCameraRig
     private static Camera? _leftEyeCamera;
     private static Camera? _rightEyeCamera;
     private static long _lastProjectionSequence;
+    private static IntPtr _leftNativeTexture;
+    private static IntPtr _rightNativeTexture;
+    private static bool _stereoSourcesRegistered;
+    private static bool _pauseFallbackActive;
 
     internal static bool IsReady =>
         _leftEyeTexture is not null &&
@@ -124,14 +128,14 @@ internal static class StereoCameraRig
                 _rightEyeTexture,
                 "right");
 
-            var leftPointer =
+            _leftNativeTexture =
                 _leftEyeTexture.GetNativeTexturePtr();
 
-            var rightPointer =
+            _rightNativeTexture =
                 _rightEyeTexture.GetNativeTexturePtr();
 
-            if (leftPointer == IntPtr.Zero ||
-                rightPointer == IntPtr.Zero)
+            if (_leftNativeTexture == IntPtr.Zero ||
+                _rightNativeTexture == IntPtr.Zero)
             {
                 logger.LogError(
                     "[StereoRig] Unity returned a null native texture pointer.");
@@ -142,8 +146,8 @@ internal static class StereoCameraRig
 
             if (!D3D11PresentHookProbe.SetStereoSourceTextures(
                     logger,
-                    leftPointer,
-                    rightPointer))
+                    _leftNativeTexture,
+                    _rightNativeTexture))
             {
                 Reset();
                 return false;
@@ -154,8 +158,14 @@ internal static class StereoCameraRig
                 $"{EyeTextureWidth}x{EyeTextureHeight}, " +
                 $"FOV={PrototypeFieldOfView:F1}, " +
                 $"IPD={HalfIpdMetres * 2.0f:F3}m, " +
-                $"left=0x{leftPointer.ToInt64():X}, " +
-                $"right=0x{rightPointer.ToInt64():X}.");
+                $"left=0x{_leftNativeTexture.ToInt64():X}, " +
+                $"right=0x{_rightNativeTexture.ToInt64():X}.");
+
+            _stereoSourcesRegistered =
+                true;
+
+            _pauseFallbackActive =
+                false;
 
             return true;
         }
@@ -166,6 +176,56 @@ internal static class StereoCameraRig
 
             Reset();
             return false;
+        }
+    }
+
+    internal static void UpdatePresentationMode()
+    {
+        if (!IsReady ||
+            _logger is null)
+        {
+            return;
+        }
+
+        var shouldUsePauseFallback =
+            Time.timeScale <= 0.0001f;
+
+        if (shouldUsePauseFallback ==
+            _pauseFallbackActive)
+        {
+            return;
+        }
+
+        _pauseFallbackActive =
+            shouldUsePauseFallback;
+
+        if (_pauseFallbackActive)
+        {
+            D3D11PresentHookProbe.ClearStereoSourceTextures(
+                _logger);
+
+            _stereoSourcesRegistered =
+                false;
+
+            _logger.LogInfo(
+                "[StereoRig] Pause detected; using desktop/cinema " +
+                "fallback so overlay UI is visible.");
+        }
+        else if (_leftNativeTexture != IntPtr.Zero &&
+                 _rightNativeTexture != IntPtr.Zero)
+        {
+            _stereoSourcesRegistered =
+                D3D11PresentHookProbe.SetStereoSourceTextures(
+                    _logger,
+                    _leftNativeTexture,
+                    _rightNativeTexture);
+
+            if (_stereoSourcesRegistered)
+            {
+                _logger.LogInfo(
+                    "[StereoRig] Gameplay resumed; stereo eye " +
+                    "textures restored.");
+            }
         }
     }
 
@@ -263,6 +323,18 @@ internal static class StereoCameraRig
     {
         _lastProjectionSequence =
             0;
+
+        _leftNativeTexture =
+            IntPtr.Zero;
+
+        _rightNativeTexture =
+            IntPtr.Zero;
+
+        _stereoSourcesRegistered =
+            false;
+
+        _pauseFallbackActive =
+            false;
 
         if (_logger is not null)
         {
