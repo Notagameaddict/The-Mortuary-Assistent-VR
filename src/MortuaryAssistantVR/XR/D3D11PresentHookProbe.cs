@@ -90,6 +90,34 @@ internal static class D3D11PresentHookProbe
         }
     }
 
+    [HideFromIl2Cpp]
+    internal static void SetInteractionPromptVisible(
+        ManualLogSource? logger,
+        bool visible)
+    {
+        try
+        {
+            var result =
+                MavrSetInteractionPromptVisible(
+                    visible
+                        ? 1
+                        : 0);
+
+            if (result != 0)
+            {
+                logger?.LogWarning(
+                    $"[PresentHookProbe] Interaction prompt state " +
+                    $"result={result}.");
+            }
+        }
+        catch (Exception exception)
+        {
+            logger?.LogWarning(
+                $"[PresentHookProbe] Interaction prompt update failed: " +
+                $"{exception.Message}");
+        }
+    }
+
     internal static bool StereoSourceTexturesReady =>
         _stereoSourceTexturesReady;
 
@@ -416,6 +444,14 @@ internal static class D3D11PresentHookProbe
             out uint adapterLuidLowPart,
             out int adapterLuidHighPart,
             out int featureLevel);
+
+    [DllImport(
+        LibraryName,
+        EntryPoint = "MAVR_SetInteractionPromptVisible",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int
+        MavrSetInteractionPromptVisible(
+            int visible);
 
     [DllImport(
         LibraryName,

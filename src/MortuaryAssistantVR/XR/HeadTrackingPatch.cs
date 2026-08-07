@@ -200,6 +200,9 @@ internal static class HeadTrackingPatch
     {
         StereoCameraRig.UpdatePresentationMode();
 
+        InteractionPromptDetector.Update(
+            _logger);
+
         if (!XrBackendManager.TryGetLatestHeadPose(
                 out var pose))
         {

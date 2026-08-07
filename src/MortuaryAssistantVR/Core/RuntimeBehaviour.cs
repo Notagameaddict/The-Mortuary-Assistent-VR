@@ -138,6 +138,8 @@ public sealed class RuntimeBehaviour : MonoBehaviour
 
         if (!isGameplayScene)
         {
+            InteractionPromptDetector.Reset();
+
             StereoCameraRig.Reset();
 
             _logger.LogInfo(

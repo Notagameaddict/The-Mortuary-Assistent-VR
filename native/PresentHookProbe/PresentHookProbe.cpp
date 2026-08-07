@@ -37,13 +37,14 @@ static ID3D11PixelShader* g_blitPixelShader = nullptr;
 static ID3D11PixelShader* g_blitPixelShaderFlipped = nullptr;
 static ID3D11SamplerState* g_blitSampler = nullptr;
 static ID3D11Buffer* g_cursorConstantBuffer = nullptr;
+static std::atomic<int> g_interactionPromptVisible = 0;
 
 struct CursorConstants
 {
     float CursorX;
     float CursorY;
     float CursorVisible;
-    float Padding;
+    float InteractionVisible;
 };
 static LUID g_adapterLuid = {};
 static D3D_FEATURE_LEVEL g_featureLevel =
@@ -368,9 +369,9 @@ static HRESULT EnsureBlitResources(
         "Texture2D sourceTexture : register(t0);"
         "SamplerState sourceSampler : register(s0);"
         "cbuffer CursorBuffer : register(b0) {"
-        "float2 cursorUv; float cursorVisible; float padding;"
+        "float2 cursorUv; float cursorVisible; float interactionVisible;"
         "};"
-        "float4 DrawCursor(float4 color, float2 uv) {"
+        "float HandShape(float2 uv) {""float2 p = (uv - float2(0.5, 0.5)) * float2(1.0, 1.7778);"float palm = step(length((p-float2(0,-0.005))/float2(0.018,0.025)),1.0);"float f1 = step(abs(p.x+0.020),0.0045)*step(abs(p.y-0.019),0.025);"float f2 = step(abs(p.x+0.007),0.0045)*step(abs(p.y-0.025),0.031);"float f3 = step(abs(p.x-0.006),0.0045)*step(abs(p.y-0.023),0.029);"float f4 = step(abs(p.x-0.019),0.0045)*step(abs(p.y-0.016),0.022);"float thumb = step(length((p-float2(-0.025,-0.004))/float2(0.014,0.007)),1.0);"return saturate(palm+f1+f2+f3+f4+thumb);"}"float4 DrawInteraction(float4 color, float2 uv) {""if (interactionVisible < 0.5) return color;"float hand = HandShape(uv);"float outline = HandShape(0.5 + (uv-0.5)*0.88);"color.rgb = lerp(color.rgb,float3(0,0,0),outline);"color.rgb = lerp(color.rgb,float3(1,1,1),hand);"return color;"}"float4 DrawCursor(float4 color, float2 uv) {"
         "if (cursorVisible < 0.5) return color;"
         "float2 d = abs(uv - cursorUv);"
         "float cross = step(d.x, 0.0025) * step(d.y, 0.018) + "
@@ -383,16 +384,16 @@ static HRESULT EnsureBlitResources(
         "}"
         "float4 main(float4 position : SV_POSITION, "
         "float2 uv : TEXCOORD0) : SV_TARGET {"
-        "return DrawCursor(sourceTexture.Sample(sourceSampler, uv), uv);"
+        "return DrawInteraction(DrawCursor(sourceTexture.Sample(sourceSampler, uv), uv), uv);"
         "}";
 
     static const char* flippedPixelShaderSource =
         "Texture2D sourceTexture : register(t0);"
         "SamplerState sourceSampler : register(s0);"
         "cbuffer CursorBuffer : register(b0) {"
-        "float2 cursorUv; float cursorVisible; float padding;"
+        "float2 cursorUv; float cursorVisible; float interactionVisible;"
         "};"
-        "float4 DrawCursor(float4 color, float2 uv) {"
+        "float HandShape(float2 uv) {""float2 p = (uv - float2(0.5, 0.5)) * float2(1.0, 1.7778);"float palm = step(length((p-float2(0,-0.005))/float2(0.018,0.025)),1.0);"float f1 = step(abs(p.x+0.020),0.0045)*step(abs(p.y-0.019),0.025);"float f2 = step(abs(p.x+0.007),0.0045)*step(abs(p.y-0.025),0.031);"float f3 = step(abs(p.x-0.006),0.0045)*step(abs(p.y-0.023),0.029);"float f4 = step(abs(p.x-0.019),0.0045)*step(abs(p.y-0.016),0.022);"float thumb = step(length((p-float2(-0.025,-0.004))/float2(0.014,0.007)),1.0);"return saturate(palm+f1+f2+f3+f4+thumb);"}"float4 DrawInteraction(float4 color, float2 uv) {""if (interactionVisible < 0.5) return color;"float hand = HandShape(uv);"float outline = HandShape(0.5 + (uv-0.5)*0.88);"color.rgb = lerp(color.rgb,float3(0,0,0),outline);"color.rgb = lerp(color.rgb,float3(1,1,1),hand);"return color;"}"float4 DrawCursor(float4 color, float2 uv) {"
         "if (cursorVisible < 0.5) return color;"
         "float2 d = abs(uv - cursorUv);"
         "float cross = step(d.x, 0.0025) * step(d.y, 0.018) + "
@@ -406,7 +407,7 @@ static HRESULT EnsureBlitResources(
         "float4 main(float4 position : SV_POSITION, "
         "float2 uv : TEXCOORD0) : SV_TARGET {"
         "float2 sampleUv = float2(uv.x, 1.0 - uv.y);"
-        "return DrawCursor(sourceTexture.Sample(sourceSampler, sampleUv), uv);"
+        "return DrawInteraction(DrawCursor(sourceTexture.Sample(sourceSampler, sampleUv), uv), uv);"
         "}";
 
     ID3DBlob* vertexBlob = nullptr;
@@ -586,6 +587,12 @@ static CursorConstants GetCursorConstants()
     constants.CursorX = 0.5f;
     constants.CursorY = 0.5f;
     constants.CursorVisible = 0.0f;
+    constants.InteractionVisible =
+        g_interactionPromptVisible.load(
+            std::memory_order_acquire)
+            != 0
+                ? 1.0f
+                : 0.0f;
 
     CURSORINFO cursorInfo = {};
     cursorInfo.cbSize = sizeof(CURSORINFO);
@@ -645,6 +652,13 @@ static CursorConstants GetCursorConstants()
         constants.CursorY <= 1.0f
             ? 1.0f
             : 0.0f;
+
+    constants.InteractionVisible =
+        g_interactionPromptVisible.load(
+            std::memory_order_acquire)
+            != 0
+                ? 1.0f
+                : 0.0f;
 
     return constants;
 }
@@ -912,6 +926,19 @@ static int BlitTextureToDestination(
     context->Release();
     device->Release();
     sourceTexture->Release();
+
+    return 0;
+}
+
+extern "C" __declspec(dllexport) int __cdecl
+MAVR_SetInteractionPromptVisible(
+    int visible)
+{
+    g_interactionPromptVisible.store(
+        visible != 0
+            ? 1
+            : 0,
+        std::memory_order_release);
 
     return 0;
 }
