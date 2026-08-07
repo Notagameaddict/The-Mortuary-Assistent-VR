@@ -53,11 +53,11 @@ internal sealed class OpenXrNativeBackend : IXrBackend
     private const float CinemaQuadWidthMetres = 2.4f;
     private const float CinemaQuadHeightMetres = 1.35f;
 
-    private const uint ToolUiSwapchainWidth = 1600;
-    private const uint ToolUiSwapchainHeight = 900;
-    private const float ToolUiQuadDistanceMetres = 1.15f;
-    private const float ToolUiQuadWidthMetres = 1.35f;
-    private const float ToolUiQuadHeightMetres = 0.759375f;
+    private const uint ToolUiSwapchainWidth = 2560;
+    private const uint ToolUiSwapchainHeight = 1440;
+    private const float ToolUiQuadDistanceMetres = 1.10f;
+    private const float ToolUiQuadWidthMetres = 1.20f;
+    private const float ToolUiQuadHeightMetres = 0.675f;
 
     private const ulong XrSwapchainUsageColorAttachmentBit = 0x00000001;
     private const ulong XrSwapchainUsageSampledBit = 0x00000020;

@@ -54,6 +54,22 @@ internal static class InteractionPromptDetector
                 logger;
         }
 
+        if (ToolMenuUiProbe.CircleRetVisible)
+        {
+            _computerTargetActive =
+                false;
+
+            _leftMouseWasDown =
+                (GetAsyncKeyState(
+                     VirtualKeyLeftMouseButton) &
+                 0x8000) != 0;
+
+            SetVisible(
+                false);
+
+            return;
+        }
+
         ResolvePlayerInteraction();
         ResolveGameplayCamera();
         InitializePhysicsReflection();

@@ -9,8 +9,13 @@ internal static class StereoCameraRig
 {
     private const int EyeTextureWidth = 1600;
     private const int EyeTextureHeight = 1728;
-    private const int ToolUiTextureWidth = 1600;
-    private const int ToolUiTextureHeight = 900;
+    // Match the game's normal 16:9 desktop backbuffer. The previous
+    // 1600x900 target changed the Canvas pixel mapping relative to the
+    // 2560x1440 screen, which made radial/tool-menu hit regions drift and
+    // also softened the UI after resampling into the OpenXR quad.
+    private const int ToolUiTextureWidth = 2560;
+    private const int ToolUiTextureHeight = 1440;
+    private const int ToolUiCaptureLayer = 30;
     private const float HalfIpdMetres = 0.032f;
     private const float PrototypeFieldOfView = 92.0f;
     private const float UiFallbackReleaseDelaySeconds = 0.75f;
@@ -32,14 +37,18 @@ internal static class StereoCameraRig
     private static RenderTexture? _toolUiTexture;
     private static IntPtr _toolUiNativeTexture;
 
-    private static Component? _inGameCanvas;
-    private static PropertyInfo? _canvasRenderModeProperty;
-    private static PropertyInfo? _canvasWorldCameraProperty;
-    private static PropertyInfo? _canvasPlaneDistanceProperty;
-    private static object? _originalCanvasRenderMode;
-    private static object? _originalCanvasWorldCamera;
-    private static object? _originalCanvasPlaneDistance;
+    private static Canvas? _inGameCanvas;
+    private static RenderMode _originalCanvasRenderMode;
+    private static Camera? _originalCanvasWorldCamera;
+    private static float _originalCanvasPlaneDistance;
     private static bool _canvasCaptureApplied;
+    private static bool _canvasCaptureFailureLogged;
+
+    private static readonly List<GameObject> _toolUiLayerObjects =
+        new();
+
+    private static readonly List<int> _toolUiOriginalLayers =
+        new();
     private static long _lastProjectionSequence;
     private static IntPtr _leftNativeTexture;
     private static IntPtr _rightNativeTexture;
@@ -376,9 +385,12 @@ internal static class StereoCameraRig
             {
                 if (!TryApplyToolUiCanvasCapture())
                 {
-                    _logger.LogWarning(
-                        "[StereoRig] CircleRet UI capture could not be " +
-                        "configured; stereo UI layer disabled.");
+                    if (!_canvasCaptureFailureLogged)
+                    {
+                        _logger.LogWarning(
+                            "[StereoRig] CircleRet UI capture could not be " +
+                            "configured; stereo UI layer disabled.");
+                    }
 
                     _stereoUiLayerActive =
                         false;
@@ -628,14 +640,10 @@ internal static class StereoCameraRig
         _inGameCanvas =
             null;
 
-        _canvasRenderModeProperty =
-            null;
+        _canvasCaptureFailureLogged =
+            false;
 
-        _canvasWorldCameraProperty =
-            null;
-
-        _canvasPlaneDistanceProperty =
-            null;
+        RestoreToolUiLayerIsolation();
     }
 
     private static void CreateToolUiCaptureResources(
@@ -683,6 +691,26 @@ internal static class StereoCameraRig
         _toolUiCamera.targetTexture =
             _toolUiTexture;
 
+        _toolUiCamera.rect =
+            new Rect(
+                0.0f,
+                0.0f,
+                1.0f,
+                1.0f);
+
+        _toolUiCamera.aspect =
+            (float)ToolUiTextureWidth /
+            ToolUiTextureHeight;
+
+        _toolUiCamera.allowHDR =
+            false;
+
+        _toolUiCamera.allowMSAA =
+            false;
+
+        _toolUiCamera.allowDynamicResolution =
+            false;
+
         _toolUiCamera.stereoTargetEye =
             StereoTargetEyeMask.None;
 
@@ -697,11 +725,25 @@ internal static class StereoCameraRig
                 0.0f);
 
         _toolUiCamera.cullingMask =
-            1 << 5;
+            1 << ToolUiCaptureLayer;
 
         _toolUiCamera.depth =
             sourceCamera.depth +
             50.0f;
+
+        // Screen-space-camera UI does not need to follow the player's world
+        // position. Keeping this camera at a neutral point prevents indoor
+        // HDRP volumes/exposure/fog from changing the menu appearance.
+        _toolUiCameraObject.transform.position =
+            new Vector3(
+                0.0f,
+                -10000.0f,
+                0.0f);
+
+        _toolUiCameraObject.transform.rotation =
+            Quaternion.identity;
+
+        ConfigureNeutralToolUiCamera();
 
         _toolUiCamera.enabled =
             false;
@@ -710,6 +752,109 @@ internal static class StereoCameraRig
             $"[StereoRig] Tool UI capture texture created: " +
             $"{ToolUiTextureWidth}x{ToolUiTextureHeight}, " +
             $"native=0x{_toolUiNativeTexture.ToInt64():X}.");
+    }
+
+    private static void ConfigureNeutralToolUiCamera()
+    {
+        if (_toolUiCameraObject == null)
+        {
+            return;
+        }
+
+        foreach (var component in
+                 _toolUiCameraObject.GetComponents<Component>())
+        {
+            if (component == null)
+            {
+                continue;
+            }
+
+            var type =
+                component.GetType();
+
+            var typeName =
+                type.FullName ??
+                type.Name;
+
+            if (!typeName.Contains(
+                    "HDAdditionalCameraData",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            // These properties differ a little between HDRP versions. Set
+            // whichever ones exist. Failures are diagnostic-only and should
+            // never break the menu.
+            TrySetBoolProperty(
+                component,
+                type,
+                "customRenderingSettings",
+                true);
+
+            TrySetBoolProperty(
+                component,
+                type,
+                "allowDynamicResolution",
+                false);
+
+            TrySetBoolProperty(
+                component,
+                type,
+                "dithering",
+                false);
+
+            TrySetBoolProperty(
+                component,
+                type,
+                "stopNaNs",
+                false);
+
+            TrySetBoolProperty(
+                component,
+                type,
+                "hasPersistentHistory",
+                false);
+
+            _logger?.LogInfo(
+                $"[StereoRig] Neutralized HDRP camera data on " +
+                $"'{typeName}' for tool UI capture.");
+
+            break;
+        }
+    }
+
+    private static void TrySetBoolProperty(
+        object target,
+        Type type,
+        string propertyName,
+        bool value)
+    {
+        try
+        {
+            var property =
+                type.GetProperty(
+                    propertyName,
+                    BindingFlags.Instance |
+                    BindingFlags.Public |
+                    BindingFlags.NonPublic);
+
+            if (property == null ||
+                !property.CanWrite ||
+                property.PropertyType !=
+                    typeof(bool))
+            {
+                return;
+            }
+
+            property.SetValue(
+                target,
+                value);
+        }
+        catch
+        {
+            // Version-dependent HDRP property; ignore if unavailable.
+        }
     }
 
     private static bool TryApplyToolUiCanvasCapture()
@@ -738,47 +883,19 @@ internal static class StereoCameraRig
             return false;
         }
 
-        // String overload avoids the IL2CPP System.Type/Il2CppSystem.Type
-        // mismatch encountered by the diagnostic probe.
         _inGameCanvas =
-            inGameUi.GetComponent(
-                "Canvas");
+            inGameUi.GetComponent<Canvas>();
 
         if (_inGameCanvas == null)
         {
-            _logger?.LogWarning(
-                "[StereoRig] InGameUI Canvas component was not found.");
+            if (!_canvasCaptureFailureLogged)
+            {
+                _canvasCaptureFailureLogged =
+                    true;
 
-            return false;
-        }
-
-        var canvasType =
-            _inGameCanvas.GetType();
-
-        _canvasRenderModeProperty =
-            canvasType.GetProperty(
-                "renderMode",
-                BindingFlags.Instance |
-                BindingFlags.Public);
-
-        _canvasWorldCameraProperty =
-            canvasType.GetProperty(
-                "worldCamera",
-                BindingFlags.Instance |
-                BindingFlags.Public);
-
-        _canvasPlaneDistanceProperty =
-            canvasType.GetProperty(
-                "planeDistance",
-                BindingFlags.Instance |
-                BindingFlags.Public);
-
-        if (_canvasRenderModeProperty == null ||
-            _canvasWorldCameraProperty == null)
-        {
-            _logger?.LogWarning(
-                $"[StereoRig] Canvas reflection API incomplete on " +
-                $"'{canvasType.FullName}'.");
+                _logger?.LogWarning(
+                    "[StereoRig] InGameUI Canvas component was not found.");
+            }
 
             return false;
         }
@@ -786,36 +903,29 @@ internal static class StereoCameraRig
         try
         {
             _originalCanvasRenderMode =
-                _canvasRenderModeProperty.GetValue(
-                    _inGameCanvas);
+                _inGameCanvas.renderMode;
 
             _originalCanvasWorldCamera =
-                _canvasWorldCameraProperty.GetValue(
-                    _inGameCanvas);
+                _inGameCanvas.worldCamera;
 
-            if (_canvasPlaneDistanceProperty != null)
+            _originalCanvasPlaneDistance =
+                _inGameCanvas.planeDistance;
+
+            _inGameCanvas.renderMode =
+                RenderMode.ScreenSpaceCamera;
+
+            _inGameCanvas.worldCamera =
+                _toolUiCamera;
+
+            _inGameCanvas.planeDistance =
+                1.0f;
+
+            if (!ApplyToolUiLayerIsolation(
+                    inGameUi))
             {
-                _originalCanvasPlaneDistance =
-                    _canvasPlaneDistanceProperty.GetValue(
-                        _inGameCanvas);
+                throw new InvalidOperationException(
+                    "CircleRet layer isolation could not be configured.");
             }
-
-            var screenSpaceCamera =
-                Enum.ToObject(
-                    _canvasRenderModeProperty.PropertyType,
-                    1);
-
-            _canvasRenderModeProperty.SetValue(
-                _inGameCanvas,
-                screenSpaceCamera);
-
-            _canvasWorldCameraProperty.SetValue(
-                _inGameCanvas,
-                _toolUiCamera);
-
-            _canvasPlaneDistanceProperty?.SetValue(
-                _inGameCanvas,
-                1.0f);
 
             _toolUiCamera.enabled =
                 true;
@@ -823,17 +933,28 @@ internal static class StereoCameraRig
             _canvasCaptureApplied =
                 true;
 
+            _canvasCaptureFailureLogged =
+                false;
+
             _logger?.LogInfo(
-                $"[StereoRig] InGameUI Canvas redirected to transparent " +
-                $"tool UI RenderTexture; canvasType='{canvasType.FullName}'.");
+                $"[StereoRig] InGameUI Canvas redirected directly to " +
+                $"transparent tool UI RenderTexture; " +
+                $"screen={Screen.width}x{Screen.height}, " +
+                $"capture={ToolUiTextureWidth}x{ToolUiTextureHeight}.");
 
             return true;
         }
         catch (Exception exception)
         {
-            _logger?.LogWarning(
-                $"[StereoRig] Redirecting InGameUI Canvas failed: " +
-                $"{exception.Message}");
+            if (!_canvasCaptureFailureLogged)
+            {
+                _canvasCaptureFailureLogged =
+                    true;
+
+                _logger?.LogWarning(
+                    $"[StereoRig] Redirecting InGameUI Canvas failed: " +
+                    $"{exception.Message}");
+            }
 
             RestoreToolUiCanvas();
 
@@ -849,6 +970,8 @@ internal static class StereoCameraRig
                 false;
         }
 
+        RestoreToolUiLayerIsolation();
+
         if (!_canvasCaptureApplied ||
             _inGameCanvas == null)
         {
@@ -860,24 +983,14 @@ internal static class StereoCameraRig
 
         try
         {
-            if (_originalCanvasRenderMode != null)
-            {
-                _canvasRenderModeProperty?.SetValue(
-                    _inGameCanvas,
-                    _originalCanvasRenderMode);
-            }
+            _inGameCanvas.renderMode =
+                _originalCanvasRenderMode;
 
-            _canvasWorldCameraProperty?.SetValue(
-                _inGameCanvas,
-                _originalCanvasWorldCamera);
+            _inGameCanvas.worldCamera =
+                _originalCanvasWorldCamera;
 
-            if (_canvasPlaneDistanceProperty != null &&
-                _originalCanvasPlaneDistance != null)
-            {
-                _canvasPlaneDistanceProperty.SetValue(
-                    _inGameCanvas,
-                    _originalCanvasPlaneDistance);
-            }
+            _inGameCanvas.planeDistance =
+                _originalCanvasPlaneDistance;
         }
         catch (Exception exception)
         {
@@ -890,15 +1003,129 @@ internal static class StereoCameraRig
             _canvasCaptureApplied =
                 false;
 
-            _originalCanvasRenderMode =
-                null;
-
-            _originalCanvasWorldCamera =
-                null;
-
-            _originalCanvasPlaneDistance =
+            _inGameCanvas =
                 null;
         }
+    }
+
+    private static bool ApplyToolUiLayerIsolation(
+        GameObject inGameUi)
+    {
+        RestoreToolUiLayerIsolation();
+
+        var circleRet =
+            GameObject.Find(
+                "InGameUI/Rsystem/CircleRet");
+
+        if (circleRet == null)
+        {
+            _logger?.LogWarning(
+                "[StereoRig] CircleRet was not found for layer isolation.");
+
+            return false;
+        }
+
+        var current =
+            circleRet.transform;
+
+        while (current != null)
+        {
+            SaveAndSetLayer(
+                current.gameObject);
+
+            if (current.gameObject ==
+                inGameUi)
+            {
+                break;
+            }
+
+            current =
+                current.parent;
+        }
+
+        SetSubtreeLayer(
+            circleRet.transform);
+
+        _logger?.LogInfo(
+            $"[StereoRig] CircleRet isolated on capture layer " +
+            $"{ToolUiCaptureLayer}; objects={_toolUiLayerObjects.Count}.");
+
+        return true;
+    }
+
+    private static void SetSubtreeLayer(
+        Transform transform)
+    {
+        if (transform == null)
+        {
+            return;
+        }
+
+        SaveAndSetLayer(
+            transform.gameObject);
+
+        for (var childIndex = 0;
+             childIndex < transform.childCount;
+             childIndex++)
+        {
+            SetSubtreeLayer(
+                transform.GetChild(
+                    childIndex));
+        }
+    }
+
+    private static void SaveAndSetLayer(
+        GameObject gameObject)
+    {
+        if (gameObject == null)
+        {
+            return;
+        }
+
+        for (var index = 0;
+             index < _toolUiLayerObjects.Count;
+             index++)
+        {
+            if (_toolUiLayerObjects[index] ==
+                gameObject)
+            {
+                return;
+            }
+        }
+
+        _toolUiLayerObjects.Add(
+            gameObject);
+
+        _toolUiOriginalLayers.Add(
+            gameObject.layer);
+
+        gameObject.layer =
+            ToolUiCaptureLayer;
+    }
+
+    private static void RestoreToolUiLayerIsolation()
+    {
+        var count =
+            Math.Min(
+                _toolUiLayerObjects.Count,
+                _toolUiOriginalLayers.Count);
+
+        for (var index = 0;
+             index < count;
+             index++)
+        {
+            var gameObject =
+                _toolUiLayerObjects[index];
+
+            if (gameObject != null)
+            {
+                gameObject.layer =
+                    _toolUiOriginalLayers[index];
+            }
+        }
+
+        _toolUiLayerObjects.Clear();
+        _toolUiOriginalLayers.Clear();
     }
 
     private static Camera? FindGameplayCamera(

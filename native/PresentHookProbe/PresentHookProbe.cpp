@@ -517,6 +517,13 @@ float4 DrawCursor(
             float3(1.0, 1.0, 1.0),
             saturate(cursorCross));
 
+    color.a =
+        max(
+            color.a,
+            saturate(
+                cursorOutline +
+                cursorCross));
+
     return color;
 }
 
@@ -680,6 +687,13 @@ float4 DrawCursor(
             color.rgb,
             float3(1.0, 1.0, 1.0),
             saturate(cursorCross));
+
+    color.a =
+        max(
+            color.a,
+            saturate(
+                cursorOutline +
+                cursorCross));
 
     return color;
 }
@@ -882,25 +896,17 @@ static CursorConstants GetCursorConstants(
 {
     CursorConstants constants = {};
 
-    if (stereoEyeIndex == -2)
-    {
-        constants.CursorX = 0.5f;
-        constants.CursorY = 0.5f;
-        constants.CursorVisible = 0.0f;
-        constants.InteractionVisible = 0.0f;
-        constants.InteractionX = 0.5f;
-        constants.InteractionY = 0.5f;
-        return constants;
-    }
     constants.CursorX = 0.5f;
     constants.CursorY = 0.5f;
     constants.CursorVisible = 0.0f;
     constants.InteractionVisible =
-        g_interactionPromptVisible.load(
-            std::memory_order_acquire)
-            != 0
-                ? 1.0f
-                : 0.0f;
+        stereoEyeIndex == -2
+            ? 0.0f
+            : (g_interactionPromptVisible.load(
+                   std::memory_order_acquire)
+                   != 0
+                       ? 1.0f
+                       : 0.0f);
 
     if (stereoEyeIndex == 0)
     {
@@ -988,11 +994,13 @@ static CursorConstants GetCursorConstants(
             : 0.0f;
 
     constants.InteractionVisible =
-        g_interactionPromptVisible.load(
-            std::memory_order_acquire)
-            != 0
-                ? 1.0f
-                : 0.0f;
+        stereoEyeIndex == -2
+            ? 0.0f
+            : (g_interactionPromptVisible.load(
+                   std::memory_order_acquire)
+                   != 0
+                       ? 1.0f
+                       : 0.0f);
 
     return constants;
 }

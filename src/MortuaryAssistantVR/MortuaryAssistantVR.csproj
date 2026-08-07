@@ -19,12 +19,9 @@
   </PropertyGroup>
 
   <Target Name="ValidateGamePath" BeforeTargets="ResolveReferences">
-    <Error Condition="'$(MortuaryAssistantDir)' == ''"
-           Text="MortuaryAssistantDir is not configured. Copy Directory.Build.props.example to Directory.Build.props and edit the path." />
-    <Error Condition="!Exists('$(GameCoreDir)\BepInEx.Core.dll')"
-           Text="BepInEx.Core.dll was not found. Check MortuaryAssistantDir and confirm BepInEx IL2CPP is installed." />
-    <Error Condition="!Exists('$(GameInteropDir)\UnityEngine.CoreModule.dll')"
-           Text="Unity interop assemblies were not found. Start the game once with BepInEx installed." />
+    <Error Condition="'$(MortuaryAssistantDir)' == ''" Text="MortuaryAssistantDir is not configured. Copy Directory.Build.props.example to Directory.Build.props and edit the path." />
+    <Error Condition="!Exists('$(GameCoreDir)\BepInEx.Core.dll')" Text="BepInEx.Core.dll was not found. Check MortuaryAssistantDir and confirm BepInEx IL2CPP is installed." />
+    <Error Condition="!Exists('$(GameInteropDir)\UnityEngine.CoreModule.dll')" Text="Unity interop assemblies were not found. Start the game once with BepInEx installed." />
   </Target>
 
   <ItemGroup>
@@ -47,6 +44,9 @@
     <Reference Include="UnityEngine.SceneManagementModule">
       <HintPath>$(GameInteropDir)\UnityEngine.SceneManagementModule.dll</HintPath>
       <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>D:\SteamLibrary\steamapps\common\The Mortuary Assistant\BepInEx\interop\UnityEngine.UIModule.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine.XRModule">
       <HintPath>$(GameInteropDir)\UnityEngine.XRModule.dll</HintPath>
