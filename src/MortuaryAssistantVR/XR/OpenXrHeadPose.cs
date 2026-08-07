@@ -8,4 +8,12 @@ internal readonly record struct OpenXrHeadPose(
     float OrientationY,
     float OrientationZ,
     float OrientationW,
+    float LeftAngleLeft,
+    float LeftAngleRight,
+    float LeftAngleUp,
+    float LeftAngleDown,
+    float RightAngleLeft,
+    float RightAngleRight,
+    float RightAngleUp,
+    float RightAngleDown,
     long Sequence);

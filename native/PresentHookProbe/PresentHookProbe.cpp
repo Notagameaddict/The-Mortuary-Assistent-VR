@@ -26,12 +26,14 @@ static std::mutex g_mutex;
 static ID3D11Device* g_capturedDevice = nullptr;
 static IDXGISwapChain* g_capturedSwapChain = nullptr;
 
-static std::atomic<void*> g_leftEyeSourceTexture = nullptr;
-static std::atomic<void*> g_rightEyeSourceTexture = nullptr;
+static std::mutex g_stereoSourceMutex;
+static ID3D11Texture2D* g_leftEyeSourceTexture = nullptr;
+static ID3D11Texture2D* g_rightEyeSourceTexture = nullptr;
 
 static ID3D11Device* g_blitDevice = nullptr;
 static ID3D11VertexShader* g_blitVertexShader = nullptr;
 static ID3D11PixelShader* g_blitPixelShader = nullptr;
+static ID3D11PixelShader* g_blitPixelShaderFlipped = nullptr;
 static ID3D11SamplerState* g_blitSampler = nullptr;
 static LUID g_adapterLuid = {};
 static D3D_FEATURE_LEVEL g_featureLevel =
@@ -280,6 +282,12 @@ static void ReleaseBlitResources()
         g_blitSampler = nullptr;
     }
 
+    if (g_blitPixelShaderFlipped != nullptr)
+    {
+        g_blitPixelShaderFlipped->Release();
+        g_blitPixelShaderFlipped = nullptr;
+    }
+
     if (g_blitPixelShader != nullptr)
     {
         g_blitPixelShader->Release();
@@ -310,6 +318,7 @@ static HRESULT EnsureBlitResources(
     if (g_blitDevice == device &&
         g_blitVertexShader != nullptr &&
         g_blitPixelShader != nullptr &&
+        g_blitPixelShaderFlipped != nullptr &&
         g_blitSampler != nullptr)
     {
         return S_OK;
@@ -336,8 +345,18 @@ static HRESULT EnsureBlitResources(
         "return sourceTexture.Sample(sourceSampler, uv);"
         "}";
 
+    static const char* flippedPixelShaderSource =
+        "Texture2D sourceTexture : register(t0);"
+        "SamplerState sourceSampler : register(s0);"
+        "float4 main(float4 position : SV_POSITION, "
+        "float2 uv : TEXCOORD0) : SV_TARGET {"
+        "uv.y = 1.0 - uv.y;"
+        "return sourceTexture.Sample(sourceSampler, uv);"
+        "}";
+
     ID3DBlob* vertexBlob = nullptr;
     ID3DBlob* pixelBlob = nullptr;
+    ID3DBlob* flippedPixelBlob = nullptr;
     ID3DBlob* errors = nullptr;
 
     HRESULT result =
@@ -392,6 +411,33 @@ static HRESULT EnsureBlitResources(
     }
 
     result =
+        D3DCompile(
+            flippedPixelShaderSource,
+            strlen(flippedPixelShaderSource),
+            "MAVRStereoFlipPS",
+            nullptr,
+            nullptr,
+            "main",
+            "ps_4_0",
+            0,
+            0,
+            &flippedPixelBlob,
+            &errors);
+
+    if (errors != nullptr)
+    {
+        errors->Release();
+        errors = nullptr;
+    }
+
+    if (FAILED(result))
+    {
+        vertexBlob->Release();
+        pixelBlob->Release();
+        return result;
+    }
+
+    result =
         device->CreateVertexShader(
             vertexBlob->GetBufferPointer(),
             vertexBlob->GetBufferSize(),
@@ -408,8 +454,19 @@ static HRESULT EnsureBlitResources(
                 &g_blitPixelShader);
     }
 
+    if (SUCCEEDED(result))
+    {
+        result =
+            device->CreatePixelShader(
+                flippedPixelBlob->GetBufferPointer(),
+                flippedPixelBlob->GetBufferSize(),
+                nullptr,
+                &g_blitPixelShaderFlipped);
+    }
+
     vertexBlob->Release();
     pixelBlob->Release();
+    flippedPixelBlob->Release();
 
     if (FAILED(result))
     {
@@ -450,6 +507,7 @@ static int BlitTextureToDestination(
     ID3D11Texture2D* sourceTexture,
     void* destinationTexturePointer,
     std::int64_t destinationDxgiFormat,
+    bool flipVertically,
     std::int32_t* nativeHResult)
 {
     if (nativeHResult != nullptr)
@@ -625,7 +683,9 @@ static int BlitTextureToDestination(
         0);
 
     context->PSSetShader(
-        g_blitPixelShader,
+        flipVertically
+            ? g_blitPixelShaderFlipped
+            : g_blitPixelShader,
         nullptr,
         0);
 
@@ -687,13 +747,53 @@ MAVR_SetStereoSourceTextures(
     void* leftTexture,
     void* rightTexture)
 {
-    g_leftEyeSourceTexture.store(
-        leftTexture,
-        std::memory_order_release);
+    ID3D11Texture2D* newLeft =
+        reinterpret_cast<ID3D11Texture2D*>(
+            leftTexture);
 
-    g_rightEyeSourceTexture.store(
-        rightTexture,
-        std::memory_order_release);
+    ID3D11Texture2D* newRight =
+        reinterpret_cast<ID3D11Texture2D*>(
+            rightTexture);
+
+    if (newLeft != nullptr)
+    {
+        newLeft->AddRef();
+    }
+
+    if (newRight != nullptr)
+    {
+        newRight->AddRef();
+    }
+
+    ID3D11Texture2D* oldLeft = nullptr;
+    ID3D11Texture2D* oldRight = nullptr;
+
+    {
+        std::lock_guard<std::mutex> guard(
+            g_stereoSourceMutex);
+
+        oldLeft =
+            g_leftEyeSourceTexture;
+
+        oldRight =
+            g_rightEyeSourceTexture;
+
+        g_leftEyeSourceTexture =
+            newLeft;
+
+        g_rightEyeSourceTexture =
+            newRight;
+    }
+
+    if (oldLeft != nullptr)
+    {
+        oldLeft->Release();
+    }
+
+    if (oldRight != nullptr)
+    {
+        oldRight->Release();
+    }
 
     return 0;
 }
@@ -705,19 +805,39 @@ MAVR_BlitStereoSourceTexture(
     std::int64_t destinationDxgiFormat,
     std::int32_t* nativeHResult)
 {
-    void* sourcePointer =
-        eyeIndex == 0
-            ? g_leftEyeSourceTexture.load(
-                std::memory_order_acquire)
-            : g_rightEyeSourceTexture.load(
-                std::memory_order_acquire);
+    ID3D11Texture2D* sourceTexture = nullptr;
 
-    return BlitTextureToDestination(
-        reinterpret_cast<ID3D11Texture2D*>(
-            sourcePointer),
-        destinationTexturePointer,
-        destinationDxgiFormat,
-        nativeHResult);
+    {
+        std::lock_guard<std::mutex> guard(
+            g_stereoSourceMutex);
+
+        sourceTexture =
+            eyeIndex == 0
+                ? g_leftEyeSourceTexture
+                : g_rightEyeSourceTexture;
+
+        if (sourceTexture != nullptr)
+        {
+            sourceTexture->AddRef();
+        }
+    }
+
+    if (sourceTexture == nullptr)
+    {
+        return 20;
+    }
+
+    const int result =
+        BlitTextureToDestination(
+            sourceTexture,
+            destinationTexturePointer,
+            destinationDxgiFormat,
+            true,
+            nativeHResult);
+
+    sourceTexture->Release();
+
+    return result;
 }
 
 extern "C" __declspec(dllexport) int __cdecl
@@ -770,6 +890,7 @@ MAVR_BlitCapturedBackBuffer(
             sourceTexture,
             destinationTexturePointer,
             destinationDxgiFormat,
+            false,
             nativeHResult);
 
     sourceTexture->Release();

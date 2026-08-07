@@ -282,6 +282,9 @@ internal static class HeadTrackingPatch
             _headBaseLocalPosition +
             localPositionDelta;
 
+        StereoCameraRig.ApplyOpenXrProjection(
+            pose);
+
         _appliedCount++;
 
         if (_appliedCount <= 5 ||

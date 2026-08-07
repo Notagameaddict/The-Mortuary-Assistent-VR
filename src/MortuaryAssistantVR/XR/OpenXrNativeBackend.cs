@@ -2298,6 +2298,22 @@ internal sealed class OpenXrNativeBackend : IXrBackend
                 left.Orientation.Y,
                 left.Orientation.Z,
                 left.Orientation.W,
+                views[0].Fov.AngleLeft,
+                views[0].Fov.AngleRight,
+                views[0].Fov.AngleUp,
+                views[0].Fov.AngleDown,
+                views.Length > 1
+                    ? views[1].Fov.AngleLeft
+                    : views[0].Fov.AngleLeft,
+                views.Length > 1
+                    ? views[1].Fov.AngleRight
+                    : views[0].Fov.AngleRight,
+                views.Length > 1
+                    ? views[1].Fov.AngleUp
+                    : views[0].Fov.AngleUp,
+                views.Length > 1
+                    ? views[1].Fov.AngleDown
+                    : views[0].Fov.AngleDown,
                 _headPoseSequence);
 
         _hasHeadPose =

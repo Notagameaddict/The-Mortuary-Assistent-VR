@@ -177,6 +177,34 @@ public sealed class RuntimeBehaviour : MonoBehaviour
             _logger);
     }
 
+    public void OnApplicationQuit()
+    {
+        ShutdownRuntime();
+    }
+
+    public void OnDestroy()
+    {
+        ShutdownRuntime();
+    }
+
+    [HideFromIl2Cpp]
+    private void ShutdownRuntime()
+    {
+        if (!_initialized ||
+            _logger is null)
+        {
+            return;
+        }
+
+        _initialized =
+            false;
+
+        StereoCameraRig.Reset();
+
+        XrBackendManager.Shutdown(
+            _logger);
+    }
+
     [HideFromIl2Cpp]
     private void InspectScene(
         Scene scene)

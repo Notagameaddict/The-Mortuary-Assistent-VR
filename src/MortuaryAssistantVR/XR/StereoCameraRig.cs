@@ -17,6 +17,7 @@ internal static class StereoCameraRig
     private static RenderTexture? _rightEyeTexture;
     private static Camera? _leftEyeCamera;
     private static Camera? _rightEyeCamera;
+    private static long _lastProjectionSequence;
 
     internal static bool IsReady =>
         _leftEyeTexture is not null &&
@@ -168,8 +169,101 @@ internal static class StereoCameraRig
         }
     }
 
+    internal static void ApplyOpenXrProjection(
+        OpenXrHeadPose pose)
+    {
+        if (!IsReady ||
+            pose.Sequence == _lastProjectionSequence)
+        {
+            return;
+        }
+
+        _lastProjectionSequence =
+            pose.Sequence;
+
+        ApplyEyeProjection(
+            _leftEyeCamera!,
+            pose.LeftAngleLeft,
+            pose.LeftAngleRight,
+            pose.LeftAngleDown,
+            pose.LeftAngleUp);
+
+        ApplyEyeProjection(
+            _rightEyeCamera!,
+            pose.RightAngleLeft,
+            pose.RightAngleRight,
+            pose.RightAngleDown,
+            pose.RightAngleUp);
+
+        if (pose.Sequence <= 5 ||
+            pose.Sequence % 600 == 0)
+        {
+            _logger?.LogInfo(
+                $"[StereoRig] Applied asymmetric OpenXR projections: " +
+                $"sequence={pose.Sequence}, " +
+                $"left=({pose.LeftAngleLeft:F3}, " +
+                $"{pose.LeftAngleRight:F3}, " +
+                $"{pose.LeftAngleDown:F3}, " +
+                $"{pose.LeftAngleUp:F3}), " +
+                $"right=({pose.RightAngleLeft:F3}, " +
+                $"{pose.RightAngleRight:F3}, " +
+                $"{pose.RightAngleDown:F3}, " +
+                $"{pose.RightAngleUp:F3}).");
+        }
+    }
+
+    private static void ApplyEyeProjection(
+        Camera camera,
+        float angleLeft,
+        float angleRight,
+        float angleDown,
+        float angleUp)
+    {
+        var near =
+            Math.Max(
+                0.01f,
+                camera.nearClipPlane);
+
+        var far =
+            Math.Max(
+                near + 0.01f,
+                camera.farClipPlane);
+
+        var left =
+            MathF.Tan(
+                angleLeft) *
+            near;
+
+        var right =
+            MathF.Tan(
+                angleRight) *
+            near;
+
+        var bottom =
+            MathF.Tan(
+                angleDown) *
+            near;
+
+        var top =
+            MathF.Tan(
+                angleUp) *
+            near;
+
+        camera.projectionMatrix =
+            Matrix4x4.Frustum(
+                left,
+                right,
+                bottom,
+                top,
+                near,
+                far);
+    }
+
     internal static void Reset()
     {
+        _lastProjectionSequence =
+            0;
+
         if (_logger is not null)
         {
             D3D11PresentHookProbe.ClearStereoSourceTextures(
