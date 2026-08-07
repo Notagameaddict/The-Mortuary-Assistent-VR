@@ -365,50 +365,300 @@ static HRESULT EnsureBlitResources(
         "return o;"
         "}";
 
-    static const char* pixelShaderSource =
-        "Texture2D sourceTexture : register(t0);"
-        "SamplerState sourceSampler : register(s0);"
-        "cbuffer CursorBuffer : register(b0) {"
-        "float2 cursorUv; float cursorVisible; float interactionVisible;"
-        "};"
-        "float HandShape(float2 uv) {""float2 p = (uv - float2(0.5, 0.5)) * float2(1.0, 1.7778);"float palm = step(length((p-float2(0,-0.005))/float2(0.018,0.025)),1.0);"float f1 = step(abs(p.x+0.020),0.0045)*step(abs(p.y-0.019),0.025);"float f2 = step(abs(p.x+0.007),0.0045)*step(abs(p.y-0.025),0.031);"float f3 = step(abs(p.x-0.006),0.0045)*step(abs(p.y-0.023),0.029);"float f4 = step(abs(p.x-0.019),0.0045)*step(abs(p.y-0.016),0.022);"float thumb = step(length((p-float2(-0.025,-0.004))/float2(0.014,0.007)),1.0);"return saturate(palm+f1+f2+f3+f4+thumb);"}"float4 DrawInteraction(float4 color, float2 uv) {""if (interactionVisible < 0.5) return color;"float hand = HandShape(uv);"float outline = HandShape(0.5 + (uv-0.5)*0.88);"color.rgb = lerp(color.rgb,float3(0,0,0),outline);"color.rgb = lerp(color.rgb,float3(1,1,1),hand);"return color;"}"float4 DrawCursor(float4 color, float2 uv) {"
-        "if (cursorVisible < 0.5) return color;"
-        "float2 d = abs(uv - cursorUv);"
-        "float cross = step(d.x, 0.0025) * step(d.y, 0.018) + "
-        "step(d.y, 0.0025) * step(d.x, 0.018);"
-        "float outline = step(d.x, 0.0045) * step(d.y, 0.021) + "
-        "step(d.y, 0.0045) * step(d.x, 0.021);"
-        "color.rgb = lerp(color.rgb, float3(0,0,0), saturate(outline));"
-        "color.rgb = lerp(color.rgb, float3(1,1,1), saturate(cross));"
-        "return color;"
-        "}"
-        "float4 main(float4 position : SV_POSITION, "
-        "float2 uv : TEXCOORD0) : SV_TARGET {"
-        "return DrawInteraction(DrawCursor(sourceTexture.Sample(sourceSampler, uv), uv), uv);"
-        "}";
+    static const char* pixelShaderSource = R"HLSL(
+Texture2D sourceTexture : register(t0);
+SamplerState sourceSampler : register(s0);
 
-    static const char* flippedPixelShaderSource =
-        "Texture2D sourceTexture : register(t0);"
-        "SamplerState sourceSampler : register(s0);"
-        "cbuffer CursorBuffer : register(b0) {"
-        "float2 cursorUv; float cursorVisible; float interactionVisible;"
-        "};"
-        "float HandShape(float2 uv) {""float2 p = (uv - float2(0.5, 0.5)) * float2(1.0, 1.7778);"float palm = step(length((p-float2(0,-0.005))/float2(0.018,0.025)),1.0);"float f1 = step(abs(p.x+0.020),0.0045)*step(abs(p.y-0.019),0.025);"float f2 = step(abs(p.x+0.007),0.0045)*step(abs(p.y-0.025),0.031);"float f3 = step(abs(p.x-0.006),0.0045)*step(abs(p.y-0.023),0.029);"float f4 = step(abs(p.x-0.019),0.0045)*step(abs(p.y-0.016),0.022);"float thumb = step(length((p-float2(-0.025,-0.004))/float2(0.014,0.007)),1.0);"return saturate(palm+f1+f2+f3+f4+thumb);"}"float4 DrawInteraction(float4 color, float2 uv) {""if (interactionVisible < 0.5) return color;"float hand = HandShape(uv);"float outline = HandShape(0.5 + (uv-0.5)*0.88);"color.rgb = lerp(color.rgb,float3(0,0,0),outline);"color.rgb = lerp(color.rgb,float3(1,1,1),hand);"return color;"}"float4 DrawCursor(float4 color, float2 uv) {"
-        "if (cursorVisible < 0.5) return color;"
-        "float2 d = abs(uv - cursorUv);"
-        "float cross = step(d.x, 0.0025) * step(d.y, 0.018) + "
-        "step(d.y, 0.0025) * step(d.x, 0.018);"
-        "float outline = step(d.x, 0.0045) * step(d.y, 0.021) + "
-        "step(d.y, 0.0045) * step(d.x, 0.021);"
-        "color.rgb = lerp(color.rgb, float3(0,0,0), saturate(outline));"
-        "color.rgb = lerp(color.rgb, float3(1,1,1), saturate(cross));"
-        "return color;"
-        "}"
-        "float4 main(float4 position : SV_POSITION, "
-        "float2 uv : TEXCOORD0) : SV_TARGET {"
-        "float2 sampleUv = float2(uv.x, 1.0 - uv.y);"
-        "return DrawInteraction(DrawCursor(sourceTexture.Sample(sourceSampler, sampleUv), uv), uv);"
-        "}";
+cbuffer CursorBuffer : register(b0)
+{
+    float2 cursorUv;
+    float cursorVisible;
+    float interactionVisible;
+};
+
+float HandShape(float2 uv)
+{
+    float2 p =
+        (uv - float2(0.5, 0.5)) *
+        float2(1.0, 1.7778);
+
+    float palm =
+        step(
+            length(
+                (p - float2(0.0, -0.005)) /
+                float2(0.018, 0.025)),
+            1.0);
+
+    float finger1 =
+        step(abs(p.x + 0.020), 0.0045) *
+        step(abs(p.y - 0.019), 0.025);
+
+    float finger2 =
+        step(abs(p.x + 0.007), 0.0045) *
+        step(abs(p.y - 0.025), 0.031);
+
+    float finger3 =
+        step(abs(p.x - 0.006), 0.0045) *
+        step(abs(p.y - 0.023), 0.029);
+
+    float finger4 =
+        step(abs(p.x - 0.019), 0.0045) *
+        step(abs(p.y - 0.016), 0.022);
+
+    float thumb =
+        step(
+            length(
+                (p - float2(-0.025, -0.004)) /
+                float2(0.014, 0.007)),
+            1.0);
+
+    return saturate(
+        palm +
+        finger1 +
+        finger2 +
+        finger3 +
+        finger4 +
+        thumb);
+}
+
+float4 DrawInteraction(
+    float4 color,
+    float2 uv)
+{
+    if (interactionVisible < 0.5)
+    {
+        return color;
+    }
+
+    float hand =
+        HandShape(uv);
+
+    float outline =
+        HandShape(
+            float2(0.5, 0.5) +
+            (uv - float2(0.5, 0.5)) *
+            0.88);
+
+    color.rgb =
+        lerp(
+            color.rgb,
+            float3(0.0, 0.0, 0.0),
+            outline);
+
+    color.rgb =
+        lerp(
+            color.rgb,
+            float3(1.0, 1.0, 1.0),
+            hand);
+
+    return color;
+}
+
+float4 DrawCursor(
+    float4 color,
+    float2 uv)
+{
+    if (cursorVisible < 0.5)
+    {
+        return color;
+    }
+
+    float2 delta =
+        abs(uv - cursorUv);
+
+    float cursorCross =
+        step(delta.x, 0.0025) *
+        step(delta.y, 0.018) +
+        step(delta.y, 0.0025) *
+        step(delta.x, 0.018);
+
+    float cursorOutline =
+        step(delta.x, 0.0045) *
+        step(delta.y, 0.021) +
+        step(delta.y, 0.0045) *
+        step(delta.x, 0.021);
+
+    color.rgb =
+        lerp(
+            color.rgb,
+            float3(0.0, 0.0, 0.0),
+            saturate(cursorOutline));
+
+    color.rgb =
+        lerp(
+            color.rgb,
+            float3(1.0, 1.0, 1.0),
+            saturate(cursorCross));
+
+    return color;
+}
+
+float4 main(
+    float4 position : SV_POSITION,
+    float2 uv : TEXCOORD0) : SV_TARGET
+{
+    float4 color =
+        sourceTexture.Sample(
+            sourceSampler,
+            uv);
+
+    return DrawInteraction(
+        DrawCursor(
+            color,
+            uv),
+        uv);
+}
+)HLSL";
+
+    static const char* flippedPixelShaderSource = R"HLSL(
+Texture2D sourceTexture : register(t0);
+SamplerState sourceSampler : register(s0);
+
+cbuffer CursorBuffer : register(b0)
+{
+    float2 cursorUv;
+    float cursorVisible;
+    float interactionVisible;
+};
+
+float HandShape(float2 uv)
+{
+    float2 p =
+        (uv - float2(0.5, 0.5)) *
+        float2(1.0, 1.7778);
+
+    float palm =
+        step(
+            length(
+                (p - float2(0.0, -0.005)) /
+                float2(0.018, 0.025)),
+            1.0);
+
+    float finger1 =
+        step(abs(p.x + 0.020), 0.0045) *
+        step(abs(p.y - 0.019), 0.025);
+
+    float finger2 =
+        step(abs(p.x + 0.007), 0.0045) *
+        step(abs(p.y - 0.025), 0.031);
+
+    float finger3 =
+        step(abs(p.x - 0.006), 0.0045) *
+        step(abs(p.y - 0.023), 0.029);
+
+    float finger4 =
+        step(abs(p.x - 0.019), 0.0045) *
+        step(abs(p.y - 0.016), 0.022);
+
+    float thumb =
+        step(
+            length(
+                (p - float2(-0.025, -0.004)) /
+                float2(0.014, 0.007)),
+            1.0);
+
+    return saturate(
+        palm +
+        finger1 +
+        finger2 +
+        finger3 +
+        finger4 +
+        thumb);
+}
+
+float4 DrawInteraction(
+    float4 color,
+    float2 uv)
+{
+    if (interactionVisible < 0.5)
+    {
+        return color;
+    }
+
+    float hand =
+        HandShape(uv);
+
+    float outline =
+        HandShape(
+            float2(0.5, 0.5) +
+            (uv - float2(0.5, 0.5)) *
+            0.88);
+
+    color.rgb =
+        lerp(
+            color.rgb,
+            float3(0.0, 0.0, 0.0),
+            outline);
+
+    color.rgb =
+        lerp(
+            color.rgb,
+            float3(1.0, 1.0, 1.0),
+            hand);
+
+    return color;
+}
+
+float4 DrawCursor(
+    float4 color,
+    float2 uv)
+{
+    if (cursorVisible < 0.5)
+    {
+        return color;
+    }
+
+    float2 delta =
+        abs(uv - cursorUv);
+
+    float cursorCross =
+        step(delta.x, 0.0025) *
+        step(delta.y, 0.018) +
+        step(delta.y, 0.0025) *
+        step(delta.x, 0.018);
+
+    float cursorOutline =
+        step(delta.x, 0.0045) *
+        step(delta.y, 0.021) +
+        step(delta.y, 0.0045) *
+        step(delta.x, 0.021);
+
+    color.rgb =
+        lerp(
+            color.rgb,
+            float3(0.0, 0.0, 0.0),
+            saturate(cursorOutline));
+
+    color.rgb =
+        lerp(
+            color.rgb,
+            float3(1.0, 1.0, 1.0),
+            saturate(cursorCross));
+
+    return color;
+}
+
+float4 main(
+    float4 position : SV_POSITION,
+    float2 uv : TEXCOORD0) : SV_TARGET
+{
+    float2 sampleUv =
+        float2(
+            uv.x,
+            1.0 - uv.y);
+
+    float4 color =
+        sourceTexture.Sample(
+            sourceSampler,
+            sampleUv);
+
+    return DrawInteraction(
+        DrawCursor(
+            color,
+            uv),
+        uv);
+}
+)HLSL";
 
     ID3DBlob* vertexBlob = nullptr;
     ID3DBlob* pixelBlob = nullptr;
