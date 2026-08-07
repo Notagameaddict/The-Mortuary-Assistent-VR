@@ -9,6 +9,8 @@ internal static class InteractionPromptDetector
 {
     private const float InteractionDistance = 3.0f;
     private const int VirtualKeyLeftMouseButton = 0x01;
+    private const int VirtualKeyRightMouseButton = 0x02;
+    private const int VirtualKeyEscape = 0x1B;
 
     private static readonly string[] FallbackMethodNames =
     {
@@ -34,10 +36,17 @@ internal static class InteractionPromptDetector
     private static bool _lastVisible;
     private static bool _computerTargetActive;
     private static bool _leftMouseWasDown;
+    private static bool _rightMouseWasDown;
+    private static bool _escapeWasDown;
+    private static bool _documentInspectionActive;
+    private static float _documentInspectionStartedAt;
     private static int _logCounter;
 
     internal static bool ComputerTargetActive =>
         _computerTargetActive;
+
+    internal static bool DocumentInspectionActive =>
+        _documentInspectionActive;
 
     [DllImport(
         "user32.dll",
@@ -52,6 +61,42 @@ internal static class InteractionPromptDetector
         {
             _logger =
                 logger;
+        }
+
+        var rightMouseDown =
+            (GetAsyncKeyState(
+                 VirtualKeyRightMouseButton) &
+             0x8000) != 0;
+
+        var escapeDown =
+            (GetAsyncKeyState(
+                 VirtualKeyEscape) &
+             0x8000) != 0;
+
+        var rightMousePressed =
+            rightMouseDown &&
+            !_rightMouseWasDown;
+
+        var escapePressed =
+            escapeDown &&
+            !_escapeWasDown;
+
+        _rightMouseWasDown =
+            rightMouseDown;
+
+        _escapeWasDown =
+            escapeDown;
+
+        if (_documentInspectionActive &&
+            (rightMousePressed ||
+             escapePressed))
+        {
+            _documentInspectionActive =
+                false;
+
+            _logger?.LogInfo(
+                "[DocumentUI] Inspection fallback released by " +
+                $"{(escapePressed ? "Escape" : "right mouse")}.");
         }
 
         if (ToolMenuUiProbe.CircleRetVisible)
@@ -116,6 +161,21 @@ internal static class InteractionPromptDetector
             }
 
             if (leftMousePressed &&
+                IsDocumentTarget(
+                    target))
+            {
+                _documentInspectionActive =
+                    true;
+
+                _documentInspectionStartedAt =
+                    Time.realtimeSinceStartup;
+
+                _logger?.LogInfo(
+                    $"[DocumentUI] Document inspection fallback armed for " +
+                    $"target '{target.name}'.");
+            }
+
+            if (leftMousePressed &&
                 !StereoCameraRig.IsUiFallbackActive)
             {
                 TryInvokePickupFallback(
@@ -158,6 +218,18 @@ internal static class InteractionPromptDetector
 
         _leftMouseWasDown =
             false;
+
+        _rightMouseWasDown =
+            false;
+
+        _escapeWasDown =
+            false;
+
+        _documentInspectionActive =
+            false;
+
+        _documentInspectionStartedAt =
+            0.0f;
 
         _logCounter =
             0;
@@ -488,6 +560,30 @@ internal static class InteractionPromptDetector
         }
 
         return true;
+    }
+
+    private static bool IsDocumentTarget(
+        GameObject target)
+    {
+        var name =
+            target.name ?? string.Empty;
+
+        return
+            name.Contains(
+                "note",
+                StringComparison.OrdinalIgnoreCase) ||
+            name.Contains(
+                "paper",
+                StringComparison.OrdinalIgnoreCase) ||
+            name.Contains(
+                "document",
+                StringComparison.OrdinalIgnoreCase) ||
+            name.Contains(
+                "letter",
+                StringComparison.OrdinalIgnoreCase) ||
+            name.Contains(
+                "clipboard",
+                StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsComputerTarget(

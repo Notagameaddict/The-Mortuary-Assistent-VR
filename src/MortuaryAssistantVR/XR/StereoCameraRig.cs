@@ -286,8 +286,12 @@ internal static class StereoCameraRig
             cursorVisible &&
             InteractionPromptDetector.ComputerTargetActive;
 
+        var documentUiSignal =
+            InteractionPromptDetector.DocumentInspectionActive;
+
         if (paused ||
-            computerUiSignal)
+            computerUiSignal ||
+            documentUiSignal)
         {
             _lastUiFallbackSignalTime =
                 now;
@@ -302,6 +306,7 @@ internal static class StereoCameraRig
         var shouldUseFullFallback =
             paused ||
             computerUiSignal ||
+            documentUiSignal ||
             fallbackReleaseDelay;
 
         // The deep probe established that the game's tool menu is
@@ -355,7 +360,8 @@ internal static class StereoCameraRig
                 _logger.LogInfo(
                     $"[StereoRig] Full UI fallback active; " +
                     $"paused={paused}, cursorVisible={cursorVisible}, " +
-                    $"computerTarget={InteractionPromptDetector.ComputerTargetActive}. " +
+                    $"computerTarget={InteractionPromptDetector.ComputerTargetActive}, " +
+                    $"documentInspection={documentUiSignal}. " +
                     "Using desktop/cinema output.");
             }
             else if (_leftNativeTexture != IntPtr.Zero &&

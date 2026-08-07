@@ -1481,16 +1481,25 @@ MAVR_DumpTextureTga(
         &sourceDesc);
 
     const bool rgba =
+        sourceDesc.Format == DXGI_FORMAT_R8G8B8A8_TYPELESS ||
         sourceDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
         sourceDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
 
     const bool bgra =
+        sourceDesc.Format == DXGI_FORMAT_B8G8R8A8_TYPELESS ||
         sourceDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM ||
         sourceDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
 
     if (!rgba &&
         !bgra)
     {
+        if (nativeHResult != nullptr)
+        {
+            *nativeHResult =
+                static_cast<std::int32_t>(
+                    sourceDesc.Format);
+        }
+
         return 41;
     }
 
