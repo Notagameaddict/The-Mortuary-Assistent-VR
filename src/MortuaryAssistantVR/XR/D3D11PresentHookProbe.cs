@@ -234,6 +234,53 @@ internal static class D3D11PresentHookProbe
     }
 
     [HideFromIl2Cpp]
+    internal static bool DumpTextureTga(
+        ManualLogSource logger,
+        IntPtr texture,
+        string outputPath,
+        string label)
+    {
+        if (texture == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        try
+        {
+            var result =
+                MavrDumpTextureTga(
+                    texture,
+                    outputPath,
+                    out var nativeHResult);
+
+            if (result != 0)
+            {
+                logger.LogWarning(
+                    $"[PresentHookProbe] {label} dump failed: " +
+                    $"result={result}, hresult=0x" +
+                    $"{unchecked((uint)nativeHResult):X8}, " +
+                    $"path='{outputPath}'.");
+
+                return false;
+            }
+
+            logger.LogInfo(
+                $"[PresentHookProbe] {label} dumped to " +
+                $"'{outputPath}'.");
+
+            return true;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                $"[PresentHookProbe] {label} dump threw: " +
+                $"{exception.Message}");
+
+            return false;
+        }
+    }
+
+    [HideFromIl2Cpp]
     internal static bool BlitSourceTexture(
         ManualLogSource logger,
         IntPtr sourceTexture,
@@ -527,6 +574,17 @@ internal static class D3D11PresentHookProbe
             int eyeIndex,
             IntPtr destinationTexture,
             long destinationDxgiFormat,
+            out int nativeHResult);
+
+    [DllImport(
+        LibraryName,
+        EntryPoint = "MAVR_DumpTextureTga",
+        CallingConvention = CallingConvention.Cdecl,
+        CharSet = CharSet.Unicode)]
+    private static extern int
+        MavrDumpTextureTga(
+            IntPtr texture,
+            string outputPath,
             out int nativeHResult);
 
     [DllImport(

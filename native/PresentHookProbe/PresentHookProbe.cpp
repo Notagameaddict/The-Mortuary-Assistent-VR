@@ -4,7 +4,9 @@
 #include <dxgi.h>
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <mutex>
+#include <vector>
 
 #include "MinHook.h"
 
@@ -1451,6 +1453,274 @@ MAVR_BlitStereoSourceTexture(
     sourceTexture->Release();
 
     return result;
+}
+
+extern "C" __declspec(dllexport) int __cdecl
+MAVR_DumpTextureTga(
+    void* texturePointer,
+    const wchar_t* outputPath,
+    std::int32_t* nativeHResult)
+{
+    if (nativeHResult != nullptr)
+    {
+        *nativeHResult = 0;
+    }
+
+    if (texturePointer == nullptr ||
+        outputPath == nullptr)
+    {
+        return 40;
+    }
+
+    auto* texture =
+        reinterpret_cast<ID3D11Texture2D*>(
+            texturePointer);
+
+    D3D11_TEXTURE2D_DESC sourceDesc = {};
+    texture->GetDesc(
+        &sourceDesc);
+
+    const bool rgba =
+        sourceDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
+        sourceDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+
+    const bool bgra =
+        sourceDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM ||
+        sourceDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+
+    if (!rgba &&
+        !bgra)
+    {
+        return 41;
+    }
+
+    if (sourceDesc.SampleDesc.Count != 1)
+    {
+        return 42;
+    }
+
+    ID3D11Device* device = nullptr;
+    texture->GetDevice(
+        &device);
+
+    if (device == nullptr)
+    {
+        return 43;
+    }
+
+    ID3D11DeviceContext* context = nullptr;
+    device->GetImmediateContext(
+        &context);
+
+    if (context == nullptr)
+    {
+        device->Release();
+        return 44;
+    }
+
+    D3D11_TEXTURE2D_DESC stagingDesc =
+        sourceDesc;
+
+    stagingDesc.BindFlags =
+        0;
+
+    stagingDesc.MiscFlags =
+        0;
+
+    stagingDesc.Usage =
+        D3D11_USAGE_STAGING;
+
+    stagingDesc.CPUAccessFlags =
+        D3D11_CPU_ACCESS_READ;
+
+    ID3D11Texture2D* staging = nullptr;
+
+    HRESULT result =
+        device->CreateTexture2D(
+            &stagingDesc,
+            nullptr,
+            &staging);
+
+    if (FAILED(result) ||
+        staging == nullptr)
+    {
+        if (nativeHResult != nullptr)
+        {
+            *nativeHResult =
+                static_cast<std::int32_t>(
+                    result);
+        }
+
+        context->Release();
+        device->Release();
+        return 45;
+    }
+
+    context->CopyResource(
+        staging,
+        texture);
+
+    D3D11_MAPPED_SUBRESOURCE mapped = {};
+
+    result =
+        context->Map(
+            staging,
+            0,
+            D3D11_MAP_READ,
+            0,
+            &mapped);
+
+    if (FAILED(result))
+    {
+        if (nativeHResult != nullptr)
+        {
+            *nativeHResult =
+                static_cast<std::int32_t>(
+                    result);
+        }
+
+        staging->Release();
+        context->Release();
+        device->Release();
+        return 46;
+    }
+
+    FILE* file = nullptr;
+
+    const errno_t openResult =
+        _wfopen_s(
+            &file,
+            outputPath,
+            L"wb");
+
+    if (openResult != 0 ||
+        file == nullptr)
+    {
+        context->Unmap(
+            staging,
+            0);
+
+        staging->Release();
+        context->Release();
+        device->Release();
+        return 47;
+    }
+
+    unsigned char header[18] = {};
+
+    header[2] =
+        2;
+
+    header[12] =
+        static_cast<unsigned char>(
+            sourceDesc.Width &
+            0xFF);
+
+    header[13] =
+        static_cast<unsigned char>(
+            (sourceDesc.Width >>
+             8) &
+            0xFF);
+
+    header[14] =
+        static_cast<unsigned char>(
+            sourceDesc.Height &
+            0xFF);
+
+    header[15] =
+        static_cast<unsigned char>(
+            (sourceDesc.Height >>
+             8) &
+            0xFF);
+
+    header[16] =
+        32;
+
+    // Top-left origin + 8 alpha bits.
+    header[17] =
+        0x28;
+
+    fwrite(
+        header,
+        1,
+        sizeof(header),
+        file);
+
+    std::vector<unsigned char> row(
+        static_cast<size_t>(
+            sourceDesc.Width) *
+        4u);
+
+    for (UINT y = 0;
+         y < sourceDesc.Height;
+         ++y)
+    {
+        const auto* sourceRow =
+            reinterpret_cast<const unsigned char*>(
+                mapped.pData) +
+            static_cast<size_t>(y) *
+                mapped.RowPitch;
+
+        for (UINT x = 0;
+             x < sourceDesc.Width;
+             ++x)
+        {
+            const size_t sourceOffset =
+                static_cast<size_t>(x) *
+                4u;
+
+            const size_t destinationOffset =
+                sourceOffset;
+
+            if (rgba)
+            {
+                row[destinationOffset + 0] =
+                    sourceRow[sourceOffset + 2];
+
+                row[destinationOffset + 1] =
+                    sourceRow[sourceOffset + 1];
+
+                row[destinationOffset + 2] =
+                    sourceRow[sourceOffset + 0];
+
+                row[destinationOffset + 3] =
+                    sourceRow[sourceOffset + 3];
+            }
+            else
+            {
+                row[destinationOffset + 0] =
+                    sourceRow[sourceOffset + 0];
+
+                row[destinationOffset + 1] =
+                    sourceRow[sourceOffset + 1];
+
+                row[destinationOffset + 2] =
+                    sourceRow[sourceOffset + 2];
+
+                row[destinationOffset + 3] =
+                    sourceRow[sourceOffset + 3];
+            }
+        }
+
+        fwrite(
+            row.data(),
+            1,
+            row.size(),
+            file);
+    }
+
+    fclose(
+        file);
+
+    context->Unmap(
+        staging,
+        0);
+
+    staging->Release();
+    context->Release();
+    device->Release();
+
+    return 0;
 }
 
 extern "C" __declspec(dllexport) int __cdecl

@@ -171,6 +171,7 @@ internal sealed class OpenXrNativeBackend : IXrBackend
     private OpenXrHeadPose _latestRenderedHeadPose;
     private bool _hasRenderedHeadPose;
     private long _lastSubmittedRenderPoseSequence;
+    private bool _toolUiDiagnosticDumped;
 
     internal OpenXrNativeBackend(ManualLogSource logger)
     {
@@ -2660,6 +2661,48 @@ internal sealed class OpenXrNativeBackend : IXrBackend
             if (!copied)
             {
                 return false;
+            }
+
+            if (!_toolUiDiagnosticDumped &&
+                sourceTexture != IntPtr.Zero)
+            {
+                _toolUiDiagnosticDumped =
+                    true;
+
+                try
+                {
+                    var dumpDirectory =
+                        Path.Combine(
+                            Paths.GameRootPath,
+                            "BepInEx",
+                            "plugins",
+                            "MortuaryAssistantVR");
+
+                    Directory.CreateDirectory(
+                        dumpDirectory);
+
+                    D3D11PresentHookProbe.DumpTextureTga(
+                        _logger,
+                        sourceTexture,
+                        Path.Combine(
+                            dumpDirectory,
+                            "ToolUiSource-v0.31.15.tga"),
+                        "Tool UI Unity source");
+
+                    D3D11PresentHookProbe.DumpTextureTga(
+                        _logger,
+                        texture,
+                        Path.Combine(
+                            dumpDirectory,
+                            "ToolUiOpenXR-v0.31.15.tga"),
+                        "Tool UI OpenXR destination");
+                }
+                catch (Exception exception)
+                {
+                    _logger.LogWarning(
+                        $"[XRBackend] Tool UI diagnostic dump failed: " +
+                        $"{exception.Message}");
+                }
             }
 
             return true;
