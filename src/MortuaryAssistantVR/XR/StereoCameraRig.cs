@@ -49,6 +49,12 @@ internal static class StereoCameraRig
 
     private static readonly List<int> _toolUiOriginalLayers =
         new();
+
+    private static readonly List<CanvasRenderer> _suppressedRootCanvasRenderers =
+        new();
+
+    private static readonly List<bool> _suppressedRootCanvasRendererCullStates =
+        new();
     private static long _lastProjectionSequence;
     private static IntPtr _leftNativeTexture;
     private static IntPtr _rightNativeTexture;
@@ -375,6 +381,11 @@ internal static class StereoCameraRig
             return;
         }
 
+        if (shouldUseStereoUiLayer)
+        {
+            ClearToolUiTextureTransparent();
+        }
+
         if (shouldUseStereoUiLayer !=
             _stereoUiLayerActive)
         {
@@ -398,9 +409,9 @@ internal static class StereoCameraRig
                 else
                 {
                     _logger.LogInfo(
-                        "[StereoRig] CircleRet stereo UI capture active. " +
-                        "World remains true stereo; desktop world camera " +
-                        "stays disabled.");
+                        "[StereoRig] CircleRet stereo UI capture active with " +
+                        "Canvas root included and Rsystem excluded. " +
+                        "Tool UI texture is cleared to transparent each frame.");
                 }
             }
             else
@@ -715,7 +726,7 @@ internal static class StereoCameraRig
             StereoTargetEyeMask.None;
 
         _toolUiCamera.clearFlags =
-            CameraClearFlags.SolidColor;
+            CameraClearFlags.Nothing;
 
         _toolUiCamera.backgroundColor =
             new Color(
@@ -857,6 +868,43 @@ internal static class StereoCameraRig
         }
     }
 
+    private static void ClearToolUiTextureTransparent()
+    {
+        if (_toolUiTexture == null)
+        {
+            return;
+        }
+
+        var previous =
+            RenderTexture.active;
+
+        try
+        {
+            RenderTexture.active =
+                _toolUiTexture;
+
+            GL.Clear(
+                true,
+                true,
+                new Color(
+                    0.0f,
+                    0.0f,
+                    0.0f,
+                    0.0f));
+        }
+        catch (Exception exception)
+        {
+            _logger?.LogWarning(
+                $"[StereoRig] Transparent UI texture clear failed: " +
+                $"{exception.Message}");
+        }
+        finally
+        {
+            RenderTexture.active =
+                previous;
+        }
+    }
+
     private static bool TryApplyToolUiCanvasCapture()
     {
         if (_toolUiCamera == null ||
@@ -926,6 +974,8 @@ internal static class StereoCameraRig
                 throw new InvalidOperationException(
                     "CircleRet layer isolation could not be configured.");
             }
+
+            ClearToolUiTextureTransparent();
 
             _toolUiCamera.enabled =
                 true;
@@ -1025,30 +1075,28 @@ internal static class StereoCameraRig
             return false;
         }
 
-        var current =
-            circleRet.transform;
+        // The previous CircleRet-only experiment proved that the root
+        // Canvas itself must also be visible to the capture camera. Without
+        // the Canvas root, the child UI is not submitted at all and only the
+        // camera background/cursor reaches the OpenXR quad.
+        //
+        // Move the InGameUI root (which owns the Canvas) plus CircleRet and
+        // its descendants. Deliberately leave the intermediate Rsystem
+        // object on its original layer so any full-screen background/dimmer
+        // component there is excluded from the UI camera.
+        SaveAndSetLayer(
+            inGameUi);
 
-        while (current != null)
-        {
-            SaveAndSetLayer(
-                current.gameObject);
-
-            if (current.gameObject ==
-                inGameUi)
-            {
-                break;
-            }
-
-            current =
-                current.parent;
-        }
+        SuppressInGameUiRootCanvasRenderers(
+            inGameUi);
 
         SetSubtreeLayer(
             circleRet.transform);
 
         _logger?.LogInfo(
-            $"[StereoRig] CircleRet isolated on capture layer " +
-            $"{ToolUiCaptureLayer}; objects={_toolUiLayerObjects.Count}.");
+            $"[StereoRig] InGameUI Canvas root + CircleRet subtree isolated " +
+            $"on capture layer {ToolUiCaptureLayer}; " +
+            $"objects={_toolUiLayerObjects.Count}. Rsystem remains excluded.");
 
         return true;
     }
@@ -1103,8 +1151,84 @@ internal static class StereoCameraRig
             ToolUiCaptureLayer;
     }
 
+    private static void SuppressInGameUiRootCanvasRenderers(
+        GameObject inGameUi)
+    {
+        RestoreInGameUiRootCanvasRenderers();
+
+        CanvasRenderer[] renderers;
+
+        try
+        {
+            renderers =
+                inGameUi.GetComponents<CanvasRenderer>();
+        }
+        catch (Exception exception)
+        {
+            _logger?.LogWarning(
+                $"[StereoRig] Reading InGameUI root CanvasRenderer(s) failed: " +
+                $"{exception.Message}");
+
+            return;
+        }
+
+        foreach (var renderer in
+                 renderers)
+        {
+            if (renderer == null)
+            {
+                continue;
+            }
+
+            _suppressedRootCanvasRenderers.Add(
+                renderer);
+
+            _suppressedRootCanvasRendererCullStates.Add(
+                renderer.cull);
+
+            // The root Canvas must be on the capture layer so the CircleRet
+            // descendants are submitted, but any Graphic attached directly
+            // to that same root must not draw. Its CanvasRenderer is the only
+            // remaining non-CircleRet renderer on layer 30.
+            renderer.cull =
+                true;
+        }
+
+        _logger?.LogInfo(
+            $"[StereoRig] Suppressed " +
+            $"{_suppressedRootCanvasRenderers.Count} CanvasRenderer(s) " +
+            "attached directly to InGameUI root during tool UI capture.");
+    }
+
+    private static void RestoreInGameUiRootCanvasRenderers()
+    {
+        var count =
+            Math.Min(
+                _suppressedRootCanvasRenderers.Count,
+                _suppressedRootCanvasRendererCullStates.Count);
+
+        for (var index = 0;
+             index < count;
+             index++)
+        {
+            var renderer =
+                _suppressedRootCanvasRenderers[index];
+
+            if (renderer != null)
+            {
+                renderer.cull =
+                    _suppressedRootCanvasRendererCullStates[index];
+            }
+        }
+
+        _suppressedRootCanvasRenderers.Clear();
+        _suppressedRootCanvasRendererCullStates.Clear();
+    }
+
     private static void RestoreToolUiLayerIsolation()
     {
+        RestoreInGameUiRootCanvasRenderers();
+
         var count =
             Math.Min(
                 _toolUiLayerObjects.Count,

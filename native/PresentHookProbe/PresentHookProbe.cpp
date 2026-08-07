@@ -536,11 +536,31 @@ float4 main(
             sourceSampler,
             uv);
 
-    return DrawInteraction(
-        DrawCursor(
-            color,
-            uv),
-        uv);
+    color =
+        DrawInteraction(
+            DrawCursor(
+                color,
+                uv),
+            uv);
+
+    if (padding.x > 0.5)
+    {
+        if (color.a <= 0.002)
+        {
+            color =
+                float4(
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0);
+        }
+        else
+        {
+            color.rgb *= color.a;
+        }
+    }
+
+    return color;
 }
 )HLSL";
 
@@ -712,11 +732,31 @@ float4 main(
             sourceSampler,
             sampleUv);
 
-    return DrawInteraction(
-        DrawCursor(
-            color,
-            uv),
-        uv);
+    color =
+        DrawInteraction(
+            DrawCursor(
+                color,
+                uv),
+            uv);
+
+    if (padding.x > 0.5)
+    {
+        if (color.a <= 0.002)
+        {
+            color =
+                float4(
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0);
+        }
+        else
+        {
+            color.rgb *= color.a;
+        }
+    }
+
+    return color;
 }
 )HLSL";
 
@@ -1001,6 +1041,13 @@ static CursorConstants GetCursorConstants(
                    != 0
                        ? 1.0f
                        : 0.0f);
+
+    // Padding0 is used as a raw-tool-UI marker by the pixel shader.
+    // The OpenXR UI layer now expects premultiplied source alpha.
+    constants.Padding0 =
+        stereoEyeIndex == -2
+            ? 1.0f
+            : 0.0f;
 
     return constants;
 }

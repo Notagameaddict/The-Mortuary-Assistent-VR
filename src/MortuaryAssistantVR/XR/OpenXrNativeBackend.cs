@@ -42,6 +42,8 @@ internal sealed class OpenXrNativeBackend : IXrBackend
     private const int XrReferenceSpaceTypeLocal = 2;
     private const int XrEnvironmentBlendModeOpaque = 1;
     private const int XrEyeVisibilityBoth = 0;
+    private const int XrEyeVisibilityLeft = 1;
+    private const int XrEyeVisibilityRight = 2;
 
     private const ulong XrCompositionLayerBlendTextureSourceAlphaBit =
         0x00000002;
@@ -55,9 +57,33 @@ internal sealed class OpenXrNativeBackend : IXrBackend
 
     private const uint ToolUiSwapchainWidth = 2560;
     private const uint ToolUiSwapchainHeight = 1440;
-    private const float ToolUiQuadDistanceMetres = 1.10f;
-    private const float ToolUiQuadWidthMetres = 1.20f;
-    private const float ToolUiQuadHeightMetres = 0.675f;
+
+    // CircleRet occupies the central portion of the game's 16:9 UI. The
+    // remaining edge pixels can contain environment-colored artifacts even
+    // though the menu itself is correct. Crop only at OpenXR composition
+    // time so Unity input and the native cursor keep using the original
+    // 2560x1440 coordinate system.
+    // v0.31.9 proved that cropping helps, but a large residual artifact
+    // remained on the right. CircleRet itself lives close to screen centre,
+    // so use a tighter asymmetric crop that removes substantially more of
+    // the right-hand side while keeping generous room around the radial
+    // slots and cursor.
+    private const int ToolUiCropX = 620;
+    private const int ToolUiCropY = 255;
+    private const int ToolUiCropWidth = 1220;
+    private const int ToolUiCropHeight = 900;
+
+    // Eye-specific VIEW-space quads. Each eye gets the same source image,
+    // centered approximately on that eye. This removes binocular disparity
+    // from the menu so it behaves like a HUD instead of a panel at finite
+    // world depth.
+    private const float ToolUiHudDistanceMetres = 1.00f;
+    private const float ToolUiHudHalfIpdMetres = 0.032f;
+    private const float ToolUiHudWidthMetres = 1.09f;
+    private const float ToolUiHudHeightMetres =
+        ToolUiHudWidthMetres *
+        ToolUiCropHeight /
+        ToolUiCropWidth;
 
     private const ulong XrSwapchainUsageColorAttachmentBit = 0x00000001;
     private const ulong XrSwapchainUsageSampledBit = 0x00000020;
@@ -3026,7 +3052,10 @@ internal sealed class OpenXrNativeBackend : IXrBackend
         var projectionLayerPointer =
             IntPtr.Zero;
 
-        var quadLayerPointer =
+        var leftQuadLayerPointer =
+            IntPtr.Zero;
+
+        var rightQuadLayerPointer =
             IntPtr.Zero;
 
         var layersPointer =
@@ -3130,7 +3159,41 @@ internal sealed class OpenXrNativeBackend : IXrBackend
             var uiImageSet =
                 _toolUiSwapchainImageSet;
 
-            var quad =
+            var subImage =
+                new XrSwapchainSubImage
+                {
+                    Swapchain =
+                        uiImageSet.Swapchain,
+
+                    ImageRect =
+                        new XrRect2Di
+                        {
+                            Offset =
+                                new XrOffset2Di
+                                {
+                                    X =
+                                        ToolUiCropX,
+
+                                    Y =
+                                        ToolUiCropY
+                                },
+
+                            Extent =
+                                new XrExtent2Di
+                                {
+                                    Width =
+                                        ToolUiCropWidth,
+
+                                    Height =
+                                        ToolUiCropHeight
+                                }
+                        },
+
+                    ImageArrayIndex =
+                        0
+                };
+
+            var leftQuad =
                 new XrCompositionLayerQuad
                 {
                     Type =
@@ -3140,45 +3203,16 @@ internal sealed class OpenXrNativeBackend : IXrBackend
                         IntPtr.Zero,
 
                     LayerFlags =
-                        XrCompositionLayerBlendTextureSourceAlphaBit |
-                        XrCompositionLayerUnpremultipliedAlphaBit,
+                        XrCompositionLayerBlendTextureSourceAlphaBit,
 
                     Space =
                         _viewSpace,
 
                     EyeVisibility =
-                        XrEyeVisibilityBoth,
+                        XrEyeVisibilityLeft,
 
                     SubImage =
-                        new XrSwapchainSubImage
-                        {
-                            Swapchain =
-                                uiImageSet.Swapchain,
-
-                            ImageRect =
-                                new XrRect2Di
-                                {
-                                    Offset =
-                                        new XrOffset2Di
-                                        {
-                                            X = 0,
-                                            Y = 0
-                                        },
-
-                                    Extent =
-                                        new XrExtent2Di
-                                        {
-                                            Width =
-                                                checked((int)uiImageSet.Width),
-
-                                            Height =
-                                                checked((int)uiImageSet.Height)
-                                        }
-                                },
-
-                            ImageArrayIndex =
-                                0
-                        },
+                        subImage,
 
                     Pose =
                         new XrPosef
@@ -3195,10 +3229,14 @@ internal sealed class OpenXrNativeBackend : IXrBackend
                             Position =
                                 new XrVector3f
                                 {
-                                    X = 0,
-                                    Y = 0,
+                                    X =
+                                        -ToolUiHudHalfIpdMetres,
+
+                                    Y =
+                                        0.0f,
+
                                     Z =
-                                        -ToolUiQuadDistanceMetres
+                                        -ToolUiHudDistanceMetres
                                 }
                         },
 
@@ -3206,28 +3244,93 @@ internal sealed class OpenXrNativeBackend : IXrBackend
                         new XrExtent2Df
                         {
                             Width =
-                                ToolUiQuadWidthMetres,
+                                ToolUiHudWidthMetres,
 
                             Height =
-                                ToolUiQuadHeightMetres
+                                ToolUiHudHeightMetres
                         }
                 };
 
-            quadLayerPointer =
+            var rightQuad =
+                new XrCompositionLayerQuad
+                {
+                    Type =
+                        XrTypeCompositionLayerQuad,
+
+                    Next =
+                        IntPtr.Zero,
+
+                    LayerFlags =
+                        XrCompositionLayerBlendTextureSourceAlphaBit,
+
+                    Space =
+                        _viewSpace,
+
+                    EyeVisibility =
+                        XrEyeVisibilityRight,
+
+                    SubImage =
+                        subImage,
+
+                    Pose =
+                        new XrPosef
+                        {
+                            Orientation =
+                                new XrQuaternionf
+                                {
+                                    X = 0.0f,
+                                    Y = 0.0f,
+                                    Z = 0.0f,
+                                    W = 1.0f
+                                },
+
+                            Position =
+                                new XrVector3f
+                                {
+                                    X =
+                                        ToolUiHudHalfIpdMetres,
+
+                                    Y =
+                                        0.0f,
+
+                                    Z =
+                                        -ToolUiHudDistanceMetres
+                                }
+                        },
+
+                    Size =
+                        new XrExtent2Df
+                        {
+                            Width =
+                                ToolUiHudWidthMetres,
+
+                            Height =
+                                ToolUiHudHeightMetres
+                        }
+                };
+
+            leftQuadLayerPointer =
+                Marshal.AllocHGlobal(
+                    Marshal.SizeOf<XrCompositionLayerQuad>());
+
+            rightQuadLayerPointer =
                 Marshal.AllocHGlobal(
                     Marshal.SizeOf<XrCompositionLayerQuad>());
 
             Marshal.StructureToPtr(
-                quad,
-                quadLayerPointer,
+                leftQuad,
+                leftQuadLayerPointer,
+                false);
+
+            Marshal.StructureToPtr(
+                rightQuad,
+                rightQuadLayerPointer,
                 false);
 
             layersPointer =
                 Marshal.AllocHGlobal(
-                    2 * IntPtr.Size);
+                    3 * IntPtr.Size);
 
-            // Projection first, head-locked UI quad second so the UI is
-            // composited over the stereo world.
             Marshal.WriteIntPtr(
                 layersPointer,
                 0,
@@ -3236,7 +3339,24 @@ internal sealed class OpenXrNativeBackend : IXrBackend
             Marshal.WriteIntPtr(
                 layersPointer,
                 IntPtr.Size,
-                quadLayerPointer);
+                leftQuadLayerPointer);
+
+            Marshal.WriteIntPtr(
+                layersPointer,
+                2 * IntPtr.Size,
+                rightQuadLayerPointer);
+
+            if ((_frameCount % 600) == 0)
+            {
+                _logger.LogInfo(
+                    $"[XRBackend] Tool UI zero-disparity HUD: " +
+                    $"crop={ToolUiCropX},{ToolUiCropY} " +
+                    $"{ToolUiCropWidth}x{ToolUiCropHeight}, " +
+                    $"distance={ToolUiHudDistanceMetres:F2}m, " +
+                    $"eyeOffset=+/-{ToolUiHudHalfIpdMetres:F3}m, " +
+                    $"size={ToolUiHudWidthMetres:F3}x" +
+                    $"{ToolUiHudHeightMetres:F3}m.");
+            }
 
             var endInfo =
                 new XrFrameEndInfo
@@ -3254,7 +3374,7 @@ internal sealed class OpenXrNativeBackend : IXrBackend
                         XrEnvironmentBlendModeOpaque,
 
                     LayerCount =
-                        2,
+                        3,
 
                     Layers =
                         layersPointer
@@ -3272,10 +3392,16 @@ internal sealed class OpenXrNativeBackend : IXrBackend
                     layersPointer);
             }
 
-            if (quadLayerPointer != IntPtr.Zero)
+            if (rightQuadLayerPointer != IntPtr.Zero)
             {
                 Marshal.FreeHGlobal(
-                    quadLayerPointer);
+                    rightQuadLayerPointer);
+            }
+
+            if (leftQuadLayerPointer != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(
+                    leftQuadLayerPointer);
             }
 
             if (projectionLayerPointer != IntPtr.Zero)
