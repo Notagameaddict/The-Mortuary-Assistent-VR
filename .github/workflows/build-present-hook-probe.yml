@@ -112,6 +112,7 @@ jobs:
             "native\PresentHookProbe\PresentHookProbe.cpp" ^
             "${{ steps.minhook.outputs.library }}" ^
             d3d11.lib ^
+            d3dcompiler.lib ^
             dxgi.lib ^
             user32.lib ^
             /link ^

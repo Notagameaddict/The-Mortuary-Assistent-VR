@@ -1867,7 +1867,7 @@ internal sealed class OpenXrNativeBackend : IXrBackend
                 XrBackendState.TestPatternRendering;
 
             StatusMessage =
-                "OpenXR stereo test-pattern rendering is active.";
+                "OpenXR desktop-mirror projection is active.";
         }
     }
 
@@ -2144,17 +2144,10 @@ internal sealed class OpenXrNativeBackend : IXrBackend
                 imageSet.Textures[
                     checked((int)imageIndex)];
 
-            var isLeftEye =
-                viewIndex == 0;
-
-            if (!D3D11PresentHookProbe.ClearTexture(
+            if (!D3D11PresentHookProbe.BlitCapturedBackBuffer(
                     _logger,
                     texture,
-                    imageSet.Format,
-                    isLeftEye ? 0.85f : 0.05f,
-                    0.05f,
-                    isLeftEye ? 0.05f : 0.85f,
-                    1.0f))
+                    imageSet.Format))
             {
                 return false;
             }

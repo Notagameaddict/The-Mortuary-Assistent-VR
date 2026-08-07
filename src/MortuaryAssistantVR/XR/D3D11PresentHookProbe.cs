@@ -90,6 +90,53 @@ internal static class D3D11PresentHookProbe
     }
 
     [HideFromIl2Cpp]
+    internal static bool BlitCapturedBackBuffer(
+        ManualLogSource logger,
+        IntPtr destinationTexture,
+        long destinationDxgiFormat)
+    {
+        if (destinationTexture == IntPtr.Zero)
+        {
+            logger.LogError(
+                "[PresentHookProbe] Cannot blit to a null texture.");
+
+            return false;
+        }
+
+        try
+        {
+            var result =
+                MavrBlitCapturedBackBuffer(
+                    destinationTexture,
+                    destinationDxgiFormat,
+                    out var nativeHResult);
+
+            if (result != 0)
+            {
+                logger.LogError(
+                    $"[PresentHookProbe] Backbuffer blit failed: " +
+                    $"result={result}, hresult=0x" +
+                    $"{unchecked((uint)nativeHResult):X8}, " +
+                    $"format={destinationDxgiFormat}, " +
+                    $"destination=0x" +
+                    $"{destinationTexture.ToInt64():X}.");
+
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(
+                $"[PresentHookProbe] Backbuffer blit threw: " +
+                $"{exception}");
+
+            return false;
+        }
+    }
+
+    [HideFromIl2Cpp]
     internal static bool ClearTexture(
         ManualLogSource logger,
         IntPtr texture,
@@ -261,6 +308,16 @@ internal static class D3D11PresentHookProbe
             out uint adapterLuidLowPart,
             out int adapterLuidHighPart,
             out int featureLevel);
+
+    [DllImport(
+        LibraryName,
+        EntryPoint = "MAVR_BlitCapturedBackBuffer",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int
+        MavrBlitCapturedBackBuffer(
+            IntPtr destinationTexture,
+            long destinationDxgiFormat,
+            out int nativeHResult);
 
     [DllImport(
         LibraryName,
