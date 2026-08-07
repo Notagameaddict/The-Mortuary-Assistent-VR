@@ -38,6 +38,10 @@ static ID3D11PixelShader* g_blitPixelShaderFlipped = nullptr;
 static ID3D11SamplerState* g_blitSampler = nullptr;
 static ID3D11Buffer* g_cursorConstantBuffer = nullptr;
 static std::atomic<int> g_interactionPromptVisible = 0;
+static std::atomic<float> g_interactionLeftU = 0.5f;
+static std::atomic<float> g_interactionLeftV = 0.5f;
+static std::atomic<float> g_interactionRightU = 0.5f;
+static std::atomic<float> g_interactionRightV = 0.5f;
 
 struct CursorConstants
 {
@@ -45,6 +49,10 @@ struct CursorConstants
     float CursorY;
     float CursorVisible;
     float InteractionVisible;
+    float InteractionX;
+    float InteractionY;
+    float Padding0;
+    float Padding1;
 };
 static LUID g_adapterLuid = {};
 static D3D_FEATURE_LEVEL g_featureLevel =
@@ -374,6 +382,8 @@ cbuffer CursorBuffer : register(b0)
     float2 cursorUv;
     float cursorVisible;
     float interactionVisible;
+    float2 interactionUv;
+    float2 padding;
 };
 
 float4 DrawInteraction(
@@ -386,7 +396,7 @@ float4 DrawInteraction(
     }
 
     float2 p =
-        (uv - float2(0.5, 0.5)) *
+        (uv - interactionUv) *
         float2(1.0, 1.7778);
 
     float radius =
@@ -536,6 +546,8 @@ cbuffer CursorBuffer : register(b0)
     float2 cursorUv;
     float cursorVisible;
     float interactionVisible;
+    float2 interactionUv;
+    float2 padding;
 };
 
 float4 DrawInteraction(
@@ -548,7 +560,7 @@ float4 DrawInteraction(
     }
 
     float2 p =
-        (uv - float2(0.5, 0.5)) *
+        (uv - interactionUv) *
         float2(1.0, 1.7778);
 
     float radius =
@@ -865,7 +877,8 @@ float4 main(
     return S_OK;
 }
 
-static CursorConstants GetCursorConstants()
+static CursorConstants GetCursorConstants(
+    int stereoEyeIndex)
 {
     CursorConstants constants = {};
     constants.CursorX = 0.5f;
@@ -877,6 +890,32 @@ static CursorConstants GetCursorConstants()
             != 0
                 ? 1.0f
                 : 0.0f;
+
+    if (stereoEyeIndex == 0)
+    {
+        constants.InteractionX =
+            g_interactionLeftU.load(
+                std::memory_order_acquire);
+
+        constants.InteractionY =
+            g_interactionLeftV.load(
+                std::memory_order_acquire);
+    }
+    else if (stereoEyeIndex == 1)
+    {
+        constants.InteractionX =
+            g_interactionRightU.load(
+                std::memory_order_acquire);
+
+        constants.InteractionY =
+            g_interactionRightV.load(
+                std::memory_order_acquire);
+    }
+    else
+    {
+        constants.InteractionX = 0.5f;
+        constants.InteractionY = 0.5f;
+    }
 
     CURSORINFO cursorInfo = {};
     cursorInfo.cbSize = sizeof(CURSORINFO);
@@ -952,6 +991,7 @@ static int BlitTextureToDestination(
     void* destinationTexturePointer,
     std::int64_t destinationDxgiFormat,
     bool flipVertically,
+    int stereoEyeIndex,
     std::int32_t* nativeHResult)
 {
     if (nativeHResult != nullptr)
@@ -1144,7 +1184,8 @@ static int BlitTextureToDestination(
         &g_blitSampler);
 
     const CursorConstants cursorConstants =
-        GetCursorConstants();
+        GetCursorConstants(
+            stereoEyeIndex);
 
     D3D11_MAPPED_SUBRESOURCE mappedCursorBuffer = {};
 
@@ -1215,13 +1256,33 @@ static int BlitTextureToDestination(
 }
 
 extern "C" __declspec(dllexport) int __cdecl
-MAVR_SetInteractionPromptVisible(
-    int visible)
+MAVR_SetInteractionPromptState(
+    int visible,
+    float leftU,
+    float leftV,
+    float rightU,
+    float rightV)
 {
     g_interactionPromptVisible.store(
         visible != 0
             ? 1
             : 0,
+        std::memory_order_release);
+
+    g_interactionLeftU.store(
+        leftU,
+        std::memory_order_release);
+
+    g_interactionLeftV.store(
+        leftV,
+        std::memory_order_release);
+
+    g_interactionRightU.store(
+        rightU,
+        std::memory_order_release);
+
+    g_interactionRightV.store(
+        rightV,
         std::memory_order_release);
 
     return 0;
@@ -1318,6 +1379,7 @@ MAVR_BlitStereoSourceTexture(
             destinationTexturePointer,
             destinationDxgiFormat,
             true,
+            eyeIndex,
             nativeHResult);
 
     sourceTexture->Release();
@@ -1376,6 +1438,7 @@ MAVR_BlitCapturedBackBuffer(
             destinationTexturePointer,
             destinationDxgiFormat,
             false,
+            -1,
             nativeHResult);
 
     sourceTexture->Release();

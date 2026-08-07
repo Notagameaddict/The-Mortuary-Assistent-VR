@@ -426,6 +426,46 @@ internal static class InteractionPromptDetector
     private static void SetVisible(
         bool visible)
     {
+        var leftU =
+            0.5f;
+
+        var leftV =
+            0.5f;
+
+        var rightU =
+            0.5f;
+
+        var rightV =
+            0.5f;
+
+        if (XrBackendManager.TryGetLatestHeadPose(
+                out var pose))
+        {
+            CalculateForwardRayUv(
+                pose.LeftAngleLeft,
+                pose.LeftAngleRight,
+                pose.LeftAngleDown,
+                pose.LeftAngleUp,
+                out leftU,
+                out leftV);
+
+            CalculateForwardRayUv(
+                pose.RightAngleLeft,
+                pose.RightAngleRight,
+                pose.RightAngleDown,
+                pose.RightAngleUp,
+                out rightU,
+                out rightV);
+        }
+
+        D3D11PresentHookProbe.SetInteractionPromptState(
+            _logger,
+            visible,
+            leftU,
+            leftV,
+            rightU,
+            rightV);
+
         if (_lastVisible ==
             visible)
         {
@@ -435,12 +475,69 @@ internal static class InteractionPromptDetector
         _lastVisible =
             visible;
 
-        D3D11PresentHookProbe.SetInteractionPromptVisible(
-            _logger,
-            visible);
-
         _logger?.LogInfo(
-            $"[InteractionPrompt] VR hand indicator " +
-            $"{(visible ? "shown" : "hidden")}.");
+            $"[InteractionPrompt] VR reticle " +
+            $"{(visible ? "shown" : "hidden")}: " +
+            $"leftUv=({leftU:F3}, {leftV:F3}), " +
+            $"rightUv=({rightU:F3}, {rightV:F3}).");
     }
+
+    private static void CalculateForwardRayUv(
+        float angleLeft,
+        float angleRight,
+        float angleDown,
+        float angleUp,
+        out float u,
+        out float v)
+    {
+        var tangentLeft =
+            MathF.Tan(
+                angleLeft);
+
+        var tangentRight =
+            MathF.Tan(
+                angleRight);
+
+        var tangentDown =
+            MathF.Tan(
+                angleDown);
+
+        var tangentUp =
+            MathF.Tan(
+                angleUp);
+
+        var horizontalRange =
+            tangentRight -
+            tangentLeft;
+
+        var verticalRange =
+            tangentUp -
+            tangentDown;
+
+        u =
+            MathF.Abs(horizontalRange) > 0.00001f
+                ? -tangentLeft /
+                  horizontalRange
+                : 0.5f;
+
+        // Shader UV has Y=0 at the top of the submitted eye image.
+        v =
+            MathF.Abs(verticalRange) > 0.00001f
+                ? tangentUp /
+                  verticalRange
+                : 0.5f;
+
+        u =
+            Math.Clamp(
+                u,
+                0.05f,
+                0.95f);
+
+        v =
+            Math.Clamp(
+                v,
+                0.05f,
+                0.95f);
+    }
+
 }

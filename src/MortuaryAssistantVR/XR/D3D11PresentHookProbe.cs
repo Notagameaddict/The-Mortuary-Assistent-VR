@@ -91,17 +91,25 @@ internal static class D3D11PresentHookProbe
     }
 
     [HideFromIl2Cpp]
-    internal static void SetInteractionPromptVisible(
+    internal static void SetInteractionPromptState(
         ManualLogSource? logger,
-        bool visible)
+        bool visible,
+        float leftU,
+        float leftV,
+        float rightU,
+        float rightV)
     {
         try
         {
             var result =
-                MavrSetInteractionPromptVisible(
+                MavrSetInteractionPromptState(
                     visible
                         ? 1
-                        : 0);
+                        : 0,
+                    leftU,
+                    leftV,
+                    rightU,
+                    rightV);
 
             if (result != 0)
             {
@@ -447,11 +455,15 @@ internal static class D3D11PresentHookProbe
 
     [DllImport(
         LibraryName,
-        EntryPoint = "MAVR_SetInteractionPromptVisible",
+        EntryPoint = "MAVR_SetInteractionPromptState",
         CallingConvention = CallingConvention.Cdecl)]
     private static extern int
-        MavrSetInteractionPromptVisible(
-            int visible);
+        MavrSetInteractionPromptState(
+            int visible,
+            float leftU,
+            float leftV,
+            float rightU,
+            float rightV);
 
     [DllImport(
         LibraryName,

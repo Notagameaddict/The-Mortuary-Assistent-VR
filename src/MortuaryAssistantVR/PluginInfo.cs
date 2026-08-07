@@ -9,5 +9,5 @@ internal static class PluginInfo
         "MortuaryAssistantVR";
 
     public const string Version =
-        "0.24.5";
+        "0.24.6";
 }
