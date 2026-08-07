@@ -38,13 +38,26 @@ internal sealed class OpenXrNativeBackend : IXrBackend
 
     private const int XrFormFactorHeadMountedDisplay = 1;
     private const int XrViewConfigurationTypePrimaryStereo = 2;
+    private const int XrReferenceSpaceTypeView = 1;
     private const int XrReferenceSpaceTypeLocal = 2;
     private const int XrEnvironmentBlendModeOpaque = 1;
     private const int XrEyeVisibilityBoth = 0;
 
+    private const ulong XrCompositionLayerBlendTextureSourceAlphaBit =
+        0x00000002;
+
+    private const ulong XrCompositionLayerUnpremultipliedAlphaBit =
+        0x00000004;
+
     private const float CinemaQuadDistanceMetres = 2.0f;
     private const float CinemaQuadWidthMetres = 2.4f;
     private const float CinemaQuadHeightMetres = 1.35f;
+
+    private const uint ToolUiSwapchainWidth = 1600;
+    private const uint ToolUiSwapchainHeight = 900;
+    private const float ToolUiQuadDistanceMetres = 1.15f;
+    private const float ToolUiQuadWidthMetres = 1.35f;
+    private const float ToolUiQuadHeightMetres = 0.759375f;
 
     private const ulong XrSwapchainUsageColorAttachmentBit = 0x00000001;
     private const ulong XrSwapchainUsageSampledBit = 0x00000020;
@@ -112,6 +125,9 @@ internal sealed class OpenXrNativeBackend : IXrBackend
     private ulong _systemId;
     private ulong _session;
     private ulong _localSpace;
+    private ulong _viewSpace;
+    private ulong _toolUiSwapchain;
+    private OpenXrSwapchainImageSet? _toolUiSwapchainImageSet;
     private readonly List<ulong> _colorSwapchains = new();
     private readonly List<OpenXrSwapchainImageSet> _swapchainImageSets = new();
     private readonly List<XrViewConfigurationView> _viewConfigurationViews = new();
@@ -126,6 +142,9 @@ internal sealed class OpenXrNativeBackend : IXrBackend
     private long _headPoseSequence;
     private OpenXrHeadPose _latestHeadPose;
     private bool _hasHeadPose;
+    private OpenXrHeadPose _latestRenderedHeadPose;
+    private bool _hasRenderedHeadPose;
+    private long _lastSubmittedRenderPoseSequence;
 
     internal OpenXrNativeBackend(ManualLogSource logger)
     {
@@ -1018,7 +1037,17 @@ internal sealed class OpenXrNativeBackend : IXrBackend
                 return false;
             }
 
+            if (!CreateViewReferenceSpace())
+            {
+                return false;
+            }
+
             if (!CreateStereoColorSwapchains())
+            {
+                return false;
+            }
+
+            if (!CreateToolUiSwapchain())
             {
                 return false;
             }
@@ -1095,6 +1124,54 @@ internal sealed class OpenXrNativeBackend : IXrBackend
 
         StatusMessage =
             "OpenXR LOCAL reference space created successfully.";
+
+        return true;
+    }
+
+    [HideFromIl2Cpp]
+    private bool CreateViewReferenceSpace()
+    {
+        if (_xrCreateReferenceSpace is null)
+        {
+            return Fail(
+                "xrCreateReferenceSpace delegate is unavailable.");
+        }
+
+        var createInfo =
+            new XrReferenceSpaceCreateInfo
+            {
+                Type =
+                    XrTypeReferenceSpaceCreateInfo,
+
+                Next =
+                    IntPtr.Zero,
+
+                ReferenceSpaceType =
+                    XrReferenceSpaceTypeView,
+
+                PoseInReferenceSpace =
+                    XrPosef.Identity
+            };
+
+        var result =
+            _xrCreateReferenceSpace(
+                _session,
+                ref createInfo,
+                out _viewSpace);
+
+        _logger.LogInfo(
+            $"[XRBackend] xrCreateReferenceSpace VIEW result={result}, " +
+            $"space=0x{_viewSpace:X}.");
+
+        if (result != XrSuccess ||
+            _viewSpace == 0)
+        {
+            _viewSpace =
+                0;
+
+            return Fail(
+                $"xrCreateReferenceSpace VIEW failed with XrResult {result}.");
+        }
 
         return true;
     }
@@ -1314,6 +1391,211 @@ internal sealed class OpenXrNativeBackend : IXrBackend
             $"[XRBackend] {StatusMessage}");
 
         return true;
+    }
+
+    [HideFromIl2Cpp]
+    private bool CreateToolUiSwapchain()
+    {
+        if (_xrCreateSwapchain is null)
+        {
+            return Fail(
+                "xrCreateSwapchain delegate is unavailable for tool UI.");
+        }
+
+        DestroyToolUiSwapchain();
+
+        var createInfo =
+            new XrSwapchainCreateInfo
+            {
+                Type =
+                    XrTypeSwapchainCreateInfo,
+
+                Next =
+                    IntPtr.Zero,
+
+                CreateFlags =
+                    0,
+
+                UsageFlags =
+                    XrSwapchainUsageColorAttachmentBit |
+                    XrSwapchainUsageSampledBit,
+
+                Format =
+                    _colorSwapchainFormat,
+
+                SampleCount =
+                    1,
+
+                Width =
+                    ToolUiSwapchainWidth,
+
+                Height =
+                    ToolUiSwapchainHeight,
+
+                FaceCount =
+                    1,
+
+                ArraySize =
+                    1,
+
+                MipCount =
+                    1
+            };
+
+        var result =
+            _xrCreateSwapchain(
+                _session,
+                ref createInfo,
+                out _toolUiSwapchain);
+
+        _logger.LogInfo(
+            $"[XRBackend] xrCreateSwapchain tool-ui result={result}, " +
+            $"swapchain=0x{_toolUiSwapchain:X}, " +
+            $"size={createInfo.Width}x{createInfo.Height}, " +
+            $"format={createInfo.Format}.");
+
+        if (result != XrSuccess ||
+            _toolUiSwapchain == 0)
+        {
+            _toolUiSwapchain =
+                0;
+
+            return Fail(
+                $"xrCreateSwapchain failed for tool UI with XrResult {result}.");
+        }
+
+        if (!EnumerateToolUiSwapchainImages(
+                _toolUiSwapchain,
+                createInfo.Width,
+                createInfo.Height,
+                createInfo.Format))
+        {
+            DestroyToolUiSwapchain();
+            return false;
+        }
+
+        return true;
+    }
+
+    [HideFromIl2Cpp]
+    private bool EnumerateToolUiSwapchainImages(
+        ulong swapchain,
+        uint width,
+        uint height,
+        long format)
+    {
+        if (_xrEnumerateSwapchainImages is null)
+        {
+            return Fail(
+                "xrEnumerateSwapchainImages delegate is unavailable.");
+        }
+
+        var countResult =
+            _xrEnumerateSwapchainImages(
+                swapchain,
+                0,
+                out var imageCount,
+                IntPtr.Zero);
+
+        if (countResult != XrSuccess ||
+            imageCount == 0)
+        {
+            return Fail(
+                "Could not query tool UI swapchain images.");
+        }
+
+        var imageSize =
+            Marshal.SizeOf<XrSwapchainImageD3D11Khr>();
+
+        var imagesPointer =
+            Marshal.AllocHGlobal(
+                checked((int)imageCount * imageSize));
+
+        try
+        {
+            for (var imageIndex = 0;
+                 imageIndex < imageCount;
+                 imageIndex++)
+            {
+                var image =
+                    new XrSwapchainImageD3D11Khr
+                    {
+                        Type =
+                            XrTypeSwapchainImageD3D11Khr,
+
+                        Next =
+                            IntPtr.Zero,
+
+                        Texture =
+                            IntPtr.Zero
+                    };
+
+                Marshal.StructureToPtr(
+                    image,
+                    IntPtr.Add(
+                        imagesPointer,
+                        imageIndex * imageSize),
+                    false);
+            }
+
+            var imagesResult =
+                _xrEnumerateSwapchainImages(
+                    swapchain,
+                    imageCount,
+                    out var writtenImageCount,
+                    imagesPointer);
+
+            if (imagesResult != XrSuccess ||
+                writtenImageCount != imageCount)
+            {
+                return Fail(
+                    "OpenXR did not return the expected tool UI images.");
+            }
+
+            var textures =
+                new List<IntPtr>(
+                    checked((int)writtenImageCount));
+
+            for (var imageIndex = 0;
+                 imageIndex < writtenImageCount;
+                 imageIndex++)
+            {
+                var image =
+                    Marshal.PtrToStructure<XrSwapchainImageD3D11Khr>(
+                        IntPtr.Add(
+                            imagesPointer,
+                            imageIndex * imageSize));
+
+                if (image.Texture == IntPtr.Zero)
+                {
+                    return Fail(
+                        $"Tool UI swapchain texture {imageIndex} is null.");
+                }
+
+                textures.Add(
+                    image.Texture);
+            }
+
+            _toolUiSwapchainImageSet =
+                new OpenXrSwapchainImageSet(
+                    -1,
+                    swapchain,
+                    width,
+                    height,
+                    format,
+                    textures);
+
+            _logger.LogInfo(
+                $"[XRBackend] Tool UI swapchain ready with " +
+                $"{textures.Count} images.");
+
+            return true;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(
+                imagesPointer);
+        }
     }
 
     [HideFromIl2Cpp]
@@ -1543,6 +1825,41 @@ internal sealed class OpenXrNativeBackend : IXrBackend
             Marshal.FreeHGlobal(
                 formatsPointer);
         }
+    }
+
+    [HideFromIl2Cpp]
+    private void DestroyToolUiSwapchain()
+    {
+        _toolUiSwapchainImageSet =
+            null;
+
+        if (_toolUiSwapchain == 0)
+        {
+            return;
+        }
+
+        if (_xrDestroySwapchain is not null)
+        {
+            try
+            {
+                var result =
+                    _xrDestroySwapchain(
+                        _toolUiSwapchain);
+
+                _logger.LogInfo(
+                    $"[XRBackend] xrDestroySwapchain tool-ui " +
+                    $"swapchain=0x{_toolUiSwapchain:X}, result={result}.");
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(
+                    $"[XRBackend] Destroy tool UI swapchain threw: " +
+                    $"{exception.Message}");
+            }
+        }
+
+        _toolUiSwapchain =
+            0;
     }
 
     [HideFromIl2Cpp]
@@ -1943,6 +2260,10 @@ internal sealed class OpenXrNativeBackend : IXrBackend
         var stereoRendering =
             D3D11PresentHookProbe.StereoSourceTexturesReady;
 
+        var stereoUiLayer =
+            stereoRendering &&
+            StereoCameraRig.StereoUiLayerActive;
+
         if (!TryRenderOutputToSwapchains(
                 stereoRendering,
                 out var acquiredViewCount))
@@ -1961,11 +2282,27 @@ internal sealed class OpenXrNativeBackend : IXrBackend
                 frameState.PredictedDisplayTime);
         }
 
+        if (stereoUiLayer &&
+            !TryRenderToolUiSwapchain())
+        {
+            // Do not lose stereo gameplay if the optional UI layer fails.
+            stereoUiLayer =
+                false;
+        }
+
+        var projectionViews =
+            BuildProjectionViewsForRenderedPose(
+                views);
+
         var endResult =
             stereoRendering
-                ? EndFrameWithProjectionLayer(
-                    frameState.PredictedDisplayTime,
-                    views)
+                ? stereoUiLayer
+                    ? EndFrameWithProjectionAndToolUiLayer(
+                        frameState.PredictedDisplayTime,
+                        projectionViews)
+                    : EndFrameWithProjectionLayer(
+                        frameState.PredictedDisplayTime,
+                        projectionViews)
                 : EndFrameWithCinemaQuad(
                     frameState.PredictedDisplayTime);
 
@@ -2204,6 +2541,133 @@ internal sealed class OpenXrNativeBackend : IXrBackend
     }
 
     [HideFromIl2Cpp]
+    private bool TryRenderToolUiSwapchain()
+    {
+        if (_xrAcquireSwapchainImage is null ||
+            _xrWaitSwapchainImage is null ||
+            _xrReleaseSwapchainImage is null ||
+            _toolUiSwapchainImageSet is null)
+        {
+            return false;
+        }
+
+        var imageSet =
+            _toolUiSwapchainImageSet;
+
+        var acquireInfo =
+            new XrSwapchainImageAcquireInfo
+            {
+                Type =
+                    XrTypeSwapchainImageAcquireInfo,
+
+                Next =
+                    IntPtr.Zero
+            };
+
+        var acquireResult =
+            _xrAcquireSwapchainImage(
+                imageSet.Swapchain,
+                ref acquireInfo,
+                out var imageIndex);
+
+        if (acquireResult != XrSuccess ||
+            imageIndex >= imageSet.Textures.Count)
+        {
+            _logger.LogWarning(
+                $"[XRBackend] Tool UI acquire failed: " +
+                $"result={acquireResult}, index={imageIndex}.");
+
+            return false;
+        }
+
+        var acquired =
+            true;
+
+        try
+        {
+            var waitInfo =
+                new XrSwapchainImageWaitInfo
+                {
+                    Type =
+                        XrTypeSwapchainImageWaitInfo,
+
+                    Next =
+                        IntPtr.Zero,
+
+                    Timeout =
+                        long.MaxValue
+                };
+
+            var waitResult =
+                _xrWaitSwapchainImage(
+                    imageSet.Swapchain,
+                    ref waitInfo);
+
+            if (waitResult != XrSuccess)
+            {
+                _logger.LogWarning(
+                    $"[XRBackend] Tool UI wait failed: " +
+                    $"result={waitResult}.");
+
+                return false;
+            }
+
+            var texture =
+                imageSet.Textures[
+                    checked((int)imageIndex)];
+
+            var sourceTexture =
+                StereoCameraRig.ToolUiNativeTexture;
+
+            var copied =
+                sourceTexture != IntPtr.Zero
+                    ? D3D11PresentHookProbe.BlitSourceTexture(
+                        _logger,
+                        sourceTexture,
+                        texture,
+                        imageSet.Format)
+                    : D3D11PresentHookProbe.BlitCapturedBackBuffer(
+                        _logger,
+                        texture,
+                        imageSet.Format);
+
+            if (!copied)
+            {
+                return false;
+            }
+
+            return true;
+        }
+        finally
+        {
+            if (acquired)
+            {
+                var releaseInfo =
+                    new XrSwapchainImageReleaseInfo
+                    {
+                        Type =
+                            XrTypeSwapchainImageReleaseInfo,
+
+                        Next =
+                            IntPtr.Zero
+                    };
+
+                var releaseResult =
+                    _xrReleaseSwapchainImage(
+                        imageSet.Swapchain,
+                        ref releaseInfo);
+
+                if (releaseResult != XrSuccess)
+                {
+                    _logger.LogWarning(
+                        $"[XRBackend] Tool UI release failed: " +
+                        $"result={releaseResult}.");
+                }
+            }
+        }
+    }
+
+    [HideFromIl2Cpp]
     private bool ReleaseAcquiredSwapchainImages(
         int acquiredViewCount)
     {
@@ -2256,6 +2720,17 @@ internal sealed class OpenXrNativeBackend : IXrBackend
         }
 
         return success;
+    }
+
+    [HideFromIl2Cpp]
+    internal void MarkRenderedHeadPose(
+        OpenXrHeadPose headPose)
+    {
+        _latestRenderedHeadPose =
+            headPose;
+
+        _hasRenderedHeadPose =
+            true;
     }
 
     [HideFromIl2Cpp]
@@ -2318,6 +2793,500 @@ internal sealed class OpenXrNativeBackend : IXrBackend
 
         _hasHeadPose =
             true;
+    }
+
+    [HideFromIl2Cpp]
+    private XrView[] BuildProjectionViewsForRenderedPose(
+        XrView[] currentViews)
+    {
+        if (!_hasRenderedHeadPose ||
+            currentViews.Length < 2)
+        {
+            return currentViews;
+        }
+
+        var rendered =
+            _latestRenderedHeadPose;
+
+        var orientation =
+            new XrQuaternionf
+            {
+                X = rendered.OrientationX,
+                Y = rendered.OrientationY,
+                Z = rendered.OrientationZ,
+                W = rendered.OrientationW
+            };
+
+        const float halfIpdMetres =
+            0.032f;
+
+        var leftOffset =
+            RotateVector(
+                orientation,
+                new XrVector3f
+                {
+                    X = -halfIpdMetres,
+                    Y = 0,
+                    Z = 0
+                });
+
+        var rightOffset =
+            RotateVector(
+                orientation,
+                new XrVector3f
+                {
+                    X = halfIpdMetres,
+                    Y = 0,
+                    Z = 0
+                });
+
+        var views =
+            new XrView[2];
+
+        views[0] =
+            currentViews[0];
+
+        views[1] =
+            currentViews[1];
+
+        views[0].Pose =
+            new XrPosef
+            {
+                Orientation =
+                    orientation,
+
+                Position =
+                    new XrVector3f
+                    {
+                        X =
+                            rendered.PositionX +
+                            leftOffset.X,
+
+                        Y =
+                            rendered.PositionY +
+                            leftOffset.Y,
+
+                        Z =
+                            rendered.PositionZ +
+                            leftOffset.Z
+                    }
+            };
+
+        views[1].Pose =
+            new XrPosef
+            {
+                Orientation =
+                    orientation,
+
+                Position =
+                    new XrVector3f
+                    {
+                        X =
+                            rendered.PositionX +
+                            rightOffset.X,
+
+                        Y =
+                            rendered.PositionY +
+                            rightOffset.Y,
+
+                        Z =
+                            rendered.PositionZ +
+                            rightOffset.Z
+                    }
+            };
+
+        views[0].Fov =
+            new XrFovf
+            {
+                AngleLeft =
+                    rendered.LeftAngleLeft,
+
+                AngleRight =
+                    rendered.LeftAngleRight,
+
+                AngleUp =
+                    rendered.LeftAngleUp,
+
+                AngleDown =
+                    rendered.LeftAngleDown
+            };
+
+        views[1].Fov =
+            new XrFovf
+            {
+                AngleLeft =
+                    rendered.RightAngleLeft,
+
+                AngleRight =
+                    rendered.RightAngleRight,
+
+                AngleUp =
+                    rendered.RightAngleUp,
+
+                AngleDown =
+                    rendered.RightAngleDown
+            };
+
+        if (rendered.Sequence !=
+            _lastSubmittedRenderPoseSequence)
+        {
+            _lastSubmittedRenderPoseSequence =
+                rendered.Sequence;
+
+            if (rendered.Sequence <= 5 ||
+                rendered.Sequence % 600 == 0)
+            {
+                _logger.LogInfo(
+                    $"[XRBackend] Submitting render-matched pose " +
+                    $"sequence={rendered.Sequence}.");
+            }
+        }
+
+        return views;
+    }
+
+    [HideFromIl2Cpp]
+    private static XrVector3f RotateVector(
+        XrQuaternionf quaternion,
+        XrVector3f vector)
+    {
+        // q * v * inverse(q), expanded without allocations.
+        var qx =
+            quaternion.X;
+
+        var qy =
+            quaternion.Y;
+
+        var qz =
+            quaternion.Z;
+
+        var qw =
+            quaternion.W;
+
+        var tx =
+            2.0f *
+            (qy * vector.Z -
+             qz * vector.Y);
+
+        var ty =
+            2.0f *
+            (qz * vector.X -
+             qx * vector.Z);
+
+        var tz =
+            2.0f *
+            (qx * vector.Y -
+             qy * vector.X);
+
+        return new XrVector3f
+        {
+            X =
+                vector.X +
+                qw * tx +
+                (qy * tz -
+                 qz * ty),
+
+            Y =
+                vector.Y +
+                qw * ty +
+                (qz * tx -
+                 qx * tz),
+
+            Z =
+                vector.Z +
+                qw * tz +
+                (qx * ty -
+                 qy * tx)
+        };
+    }
+
+    [HideFromIl2Cpp]
+    private int EndFrameWithProjectionAndToolUiLayer(
+        long displayTime,
+        XrView[] views)
+    {
+        if (_xrEndFrame is null ||
+            views.Length < 2 ||
+            _swapchainImageSets.Count < 2 ||
+            _toolUiSwapchainImageSet is null ||
+            _viewSpace == 0)
+        {
+            return EndFrameWithProjectionLayer(
+                displayTime,
+                views);
+        }
+
+        var projectionViewSize =
+            Marshal.SizeOf<XrCompositionLayerProjectionView>();
+
+        var projectionViewsPointer =
+            Marshal.AllocHGlobal(
+                2 * projectionViewSize);
+
+        var projectionLayerPointer =
+            IntPtr.Zero;
+
+        var quadLayerPointer =
+            IntPtr.Zero;
+
+        var layersPointer =
+            IntPtr.Zero;
+
+        try
+        {
+            for (var viewIndex = 0;
+                 viewIndex < 2;
+                 viewIndex++)
+            {
+                var imageSet =
+                    _swapchainImageSets[viewIndex];
+
+                var projectionView =
+                    new XrCompositionLayerProjectionView
+                    {
+                        Type =
+                            XrTypeCompositionLayerProjectionView,
+
+                        Next =
+                            IntPtr.Zero,
+
+                        Pose =
+                            views[viewIndex].Pose,
+
+                        Fov =
+                            views[viewIndex].Fov,
+
+                        SubImage =
+                            new XrSwapchainSubImage
+                            {
+                                Swapchain =
+                                    imageSet.Swapchain,
+
+                                ImageRect =
+                                    new XrRect2Di
+                                    {
+                                        Offset =
+                                            new XrOffset2Di
+                                            {
+                                                X = 0,
+                                                Y = 0
+                                            },
+
+                                        Extent =
+                                            new XrExtent2Di
+                                            {
+                                                Width =
+                                                    checked((int)imageSet.Width),
+
+                                                Height =
+                                                    checked((int)imageSet.Height)
+                                            }
+                                    },
+
+                                ImageArrayIndex =
+                                    0
+                            }
+                    };
+
+                Marshal.StructureToPtr(
+                    projectionView,
+                    IntPtr.Add(
+                        projectionViewsPointer,
+                        viewIndex * projectionViewSize),
+                    false);
+            }
+
+            var projectionLayer =
+                new XrCompositionLayerProjection
+                {
+                    Type =
+                        XrTypeCompositionLayerProjection,
+
+                    Next =
+                        IntPtr.Zero,
+
+                    LayerFlags =
+                        0,
+
+                    Space =
+                        _localSpace,
+
+                    ViewCount =
+                        2,
+
+                    Views =
+                        projectionViewsPointer
+                };
+
+            projectionLayerPointer =
+                Marshal.AllocHGlobal(
+                    Marshal.SizeOf<XrCompositionLayerProjection>());
+
+            Marshal.StructureToPtr(
+                projectionLayer,
+                projectionLayerPointer,
+                false);
+
+            var uiImageSet =
+                _toolUiSwapchainImageSet;
+
+            var quad =
+                new XrCompositionLayerQuad
+                {
+                    Type =
+                        XrTypeCompositionLayerQuad,
+
+                    Next =
+                        IntPtr.Zero,
+
+                    LayerFlags =
+                        XrCompositionLayerBlendTextureSourceAlphaBit |
+                        XrCompositionLayerUnpremultipliedAlphaBit,
+
+                    Space =
+                        _viewSpace,
+
+                    EyeVisibility =
+                        XrEyeVisibilityBoth,
+
+                    SubImage =
+                        new XrSwapchainSubImage
+                        {
+                            Swapchain =
+                                uiImageSet.Swapchain,
+
+                            ImageRect =
+                                new XrRect2Di
+                                {
+                                    Offset =
+                                        new XrOffset2Di
+                                        {
+                                            X = 0,
+                                            Y = 0
+                                        },
+
+                                    Extent =
+                                        new XrExtent2Di
+                                        {
+                                            Width =
+                                                checked((int)uiImageSet.Width),
+
+                                            Height =
+                                                checked((int)uiImageSet.Height)
+                                        }
+                                },
+
+                            ImageArrayIndex =
+                                0
+                        },
+
+                    Pose =
+                        new XrPosef
+                        {
+                            Orientation =
+                                new XrQuaternionf
+                                {
+                                    X = 0.0f,
+                                    Y = 0.0f,
+                                    Z = 0.0f,
+                                    W = 1.0f
+                                },
+
+                            Position =
+                                new XrVector3f
+                                {
+                                    X = 0,
+                                    Y = 0,
+                                    Z =
+                                        -ToolUiQuadDistanceMetres
+                                }
+                        },
+
+                    Size =
+                        new XrExtent2Df
+                        {
+                            Width =
+                                ToolUiQuadWidthMetres,
+
+                            Height =
+                                ToolUiQuadHeightMetres
+                        }
+                };
+
+            quadLayerPointer =
+                Marshal.AllocHGlobal(
+                    Marshal.SizeOf<XrCompositionLayerQuad>());
+
+            Marshal.StructureToPtr(
+                quad,
+                quadLayerPointer,
+                false);
+
+            layersPointer =
+                Marshal.AllocHGlobal(
+                    2 * IntPtr.Size);
+
+            // Projection first, head-locked UI quad second so the UI is
+            // composited over the stereo world.
+            Marshal.WriteIntPtr(
+                layersPointer,
+                0,
+                projectionLayerPointer);
+
+            Marshal.WriteIntPtr(
+                layersPointer,
+                IntPtr.Size,
+                quadLayerPointer);
+
+            var endInfo =
+                new XrFrameEndInfo
+                {
+                    Type =
+                        XrTypeFrameEndInfo,
+
+                    Next =
+                        IntPtr.Zero,
+
+                    DisplayTime =
+                        displayTime,
+
+                    EnvironmentBlendMode =
+                        XrEnvironmentBlendModeOpaque,
+
+                    LayerCount =
+                        2,
+
+                    Layers =
+                        layersPointer
+                };
+
+            return _xrEndFrame(
+                _session,
+                ref endInfo);
+        }
+        finally
+        {
+            if (layersPointer != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(
+                    layersPointer);
+            }
+
+            if (quadLayerPointer != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(
+                    quadLayerPointer);
+            }
+
+            if (projectionLayerPointer != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(
+                    projectionLayerPointer);
+            }
+
+            Marshal.FreeHGlobal(
+                projectionViewsPointer);
+        }
     }
 
     [HideFromIl2Cpp]
@@ -2855,7 +3824,32 @@ internal sealed class OpenXrNativeBackend : IXrBackend
             EndSession();
         }
 
+        DestroyToolUiSwapchain();
+
         DestroyColorSwapchains();
+
+        if (_viewSpace != 0 &&
+            _xrDestroySpace is not null)
+        {
+            try
+            {
+                var result =
+                    _xrDestroySpace(
+                        _viewSpace);
+
+                _logger.LogInfo(
+                    $"[XRBackend] xrDestroySpace VIEW result={result}.");
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(
+                    $"[XRBackend] xrDestroySpace VIEW threw: " +
+                    $"{exception.Message}");
+            }
+
+            _viewSpace =
+                0;
+        }
 
         if (_localSpace != 0 &&
             _xrDestroySpace is not null)

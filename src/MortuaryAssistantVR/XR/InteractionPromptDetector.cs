@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.InteropServices;
 using BepInEx.Logging;
 using UnityEngine;
 
@@ -7,7 +8,16 @@ namespace MortuaryAssistantVR.XR;
 internal static class InteractionPromptDetector
 {
     private const float InteractionDistance = 3.0f;
+    private const int VirtualKeyLeftMouseButton = 0x01;
 
+    private static readonly string[] FallbackMethodNames =
+    {
+        "Pickup",
+        "PickUp",
+        "Take",
+        "Use",
+        "Interact"
+    };
 
     private static ManualLogSource? _logger;
     private static Component? _playerInteraction;
@@ -22,7 +32,18 @@ internal static class InteractionPromptDetector
 
     private static bool _physicsReflectionInitialized;
     private static bool _lastVisible;
+    private static bool _computerTargetActive;
+    private static bool _leftMouseWasDown;
     private static int _logCounter;
+
+    internal static bool ComputerTargetActive =>
+        _computerTargetActive;
+
+    [DllImport(
+        "user32.dll",
+        EntryPoint = "GetAsyncKeyState")]
+    private static extern short GetAsyncKeyState(
+        int virtualKey);
 
     internal static void Update(
         ManualLogSource? logger)
@@ -42,11 +63,29 @@ internal static class InteractionPromptDetector
                 out var target,
                 out var distance);
 
+        _computerTargetActive =
+            hitSomething &&
+            target != null &&
+            IsComputerTarget(
+                target);
+
         SetVisible(
             hitSomething);
 
+        var leftMouseDown =
+            (GetAsyncKeyState(
+                 VirtualKeyLeftMouseButton) &
+             0x8000) != 0;
+
+        var leftMousePressed =
+            leftMouseDown &&
+            !_leftMouseWasDown;
+
+        _leftMouseWasDown =
+            leftMouseDown;
+
         if (hitSomething &&
-            target is not null)
+            target != null)
         {
             _logCounter++;
 
@@ -60,6 +99,12 @@ internal static class InteractionPromptDetector
                     $"layer={target.layer}.");
             }
 
+            if (leftMousePressed &&
+                !StereoCameraRig.IsUiFallbackActive)
+            {
+                TryInvokePickupFallback(
+                    target);
+            }
         }
     }
 
@@ -92,6 +137,12 @@ internal static class InteractionPromptDetector
         _colliderGameObjectProperty =
             null;
 
+        _computerTargetActive =
+            false;
+
+        _leftMouseWasDown =
+            false;
+
         _logCounter =
             0;
 
@@ -101,7 +152,7 @@ internal static class InteractionPromptDetector
 
     private static void ResolvePlayerInteraction()
     {
-        if (_playerInteraction is not null)
+        if (_playerInteraction != null)
         {
             return;
         }
@@ -110,7 +161,7 @@ internal static class InteractionPromptDetector
             GameObject.Find(
                 "Player");
 
-        if (player is null)
+        if (player == null)
         {
             return;
         }
@@ -118,7 +169,7 @@ internal static class InteractionPromptDetector
         foreach (var component in
                  player.GetComponents<Component>())
         {
-            if (component is null)
+            if (component == null)
             {
                 continue;
             }
@@ -145,7 +196,7 @@ internal static class InteractionPromptDetector
 
     private static void ResolveGameplayCamera()
     {
-        if (_gameplayCamera is not null)
+        if (_gameplayCamera != null)
         {
             return;
         }
@@ -154,13 +205,13 @@ internal static class InteractionPromptDetector
             GameObject.Find(
                 "MortuaryAssistantVR_Head");
 
-        if (head is not null)
+        if (head != null)
         {
             foreach (var camera in
                      head.GetComponentsInChildren<Camera>(
                          true))
             {
-                if (camera is null)
+                if (camera == null)
                 {
                     continue;
                 }
@@ -183,7 +234,7 @@ internal static class InteractionPromptDetector
         _gameplayCamera ??=
             Camera.main;
 
-        if (_gameplayCamera is not null)
+        if (_gameplayCamera != null)
         {
             _logger?.LogInfo(
                 $"[InteractionPrompt] Ray camera resolved: " +
@@ -325,7 +376,7 @@ internal static class InteractionPromptDetector
         distance =
             0;
 
-        if (_gameplayCamera is null ||
+        if (_gameplayCamera == null ||
             _raycastHitType is null ||
             _raycastMethod is null ||
             _hitColliderProperty is null ||
@@ -396,7 +447,7 @@ internal static class InteractionPromptDetector
             _colliderGameObjectProperty.GetValue(
                 collider) as GameObject;
 
-        if (target is null)
+        if (target == null)
         {
             return false;
         }
@@ -421,6 +472,113 @@ internal static class InteractionPromptDetector
         }
 
         return true;
+    }
+
+    private static bool IsComputerTarget(
+        GameObject target)
+    {
+        var transform =
+            target.transform;
+
+        for (var depth = 0;
+             transform != null &&
+             depth < 5;
+             depth++)
+        {
+            var lower =
+                transform.gameObject.name.ToLowerInvariant();
+
+            if (lower.Contains(
+                    "compwall") ||
+                lower.Contains(
+                    "computer") ||
+                lower.Contains(
+                    "pcscreen") ||
+                lower.Contains(
+                    "monitor"))
+            {
+                return true;
+            }
+
+            transform =
+                transform.parent;
+        }
+
+        return false;
+    }
+
+    private static void TryInvokePickupFallback(
+        GameObject target)
+    {
+        // Let the game's normal code own doors and the mortuary computer.
+        // The fallback is only meant to rescue missed pickup/use clicks.
+        if (IsComputerTarget(
+                target))
+        {
+            return;
+        }
+
+        var lowerName =
+            target.name.ToLowerInvariant();
+
+        if (lowerName.Contains(
+                "door"))
+        {
+            return;
+        }
+
+        foreach (var component in
+                 target.GetComponentsInParent<Component>(
+                     true))
+        {
+            if (component == null)
+            {
+                continue;
+            }
+
+            var type =
+                component.GetType();
+
+            foreach (var methodName in
+                     FallbackMethodNames)
+            {
+                var method =
+                    type.GetMethod(
+                        methodName,
+                        BindingFlags.Instance |
+                        BindingFlags.Public |
+                        BindingFlags.NonPublic,
+                        binder: null,
+                        types: Type.EmptyTypes,
+                        modifiers: null);
+
+                if (method is null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    method.Invoke(
+                        component,
+                        null);
+
+                    _logger?.LogInfo(
+                        $"[InteractionPrompt] Click fallback invoked " +
+                        $"'{type.FullName}.{method.Name}()' on " +
+                        $"'{target.name}'.");
+
+                    return;
+                }
+                catch (Exception exception)
+                {
+                    _logger?.LogWarning(
+                        $"[InteractionPrompt] Click fallback failed for " +
+                        $"'{type.FullName}.{method.Name}()': " +
+                        $"{exception.Message}");
+                }
+            }
+        }
     }
 
     private static void SetVisible(

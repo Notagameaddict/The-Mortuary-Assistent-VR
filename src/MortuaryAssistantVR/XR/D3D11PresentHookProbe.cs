@@ -234,6 +234,50 @@ internal static class D3D11PresentHookProbe
     }
 
     [HideFromIl2Cpp]
+    internal static bool BlitSourceTexture(
+        ManualLogSource logger,
+        IntPtr sourceTexture,
+        IntPtr destinationTexture,
+        long destinationDxgiFormat)
+    {
+        if (sourceTexture == IntPtr.Zero ||
+            destinationTexture == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        try
+        {
+            var result =
+                MavrBlitSourceTexture(
+                    sourceTexture,
+                    destinationTexture,
+                    destinationDxgiFormat,
+                    out var nativeHResult);
+
+            if (result != 0)
+            {
+                logger.LogError(
+                    $"[PresentHookProbe] Source texture blit failed: " +
+                    $"result={result}, hresult=0x" +
+                    $"{unchecked((uint)nativeHResult):X8}.");
+
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(
+                $"[PresentHookProbe] Source texture blit threw: " +
+                $"{exception}");
+
+            return false;
+        }
+    }
+
+    [HideFromIl2Cpp]
     internal static bool BlitCapturedBackBuffer(
         ManualLogSource logger,
         IntPtr destinationTexture,
@@ -481,6 +525,17 @@ internal static class D3D11PresentHookProbe
     private static extern int
         MavrBlitStereoSourceTexture(
             int eyeIndex,
+            IntPtr destinationTexture,
+            long destinationDxgiFormat,
+            out int nativeHResult);
+
+    [DllImport(
+        LibraryName,
+        EntryPoint = "MAVR_BlitSourceTexture",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int
+        MavrBlitSourceTexture(
+            IntPtr sourceTexture,
             IntPtr destinationTexture,
             long destinationDxgiFormat,
             out int nativeHResult);

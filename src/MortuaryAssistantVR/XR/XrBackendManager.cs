@@ -152,6 +152,20 @@ internal static class XrBackendManager
     }
 
     [HideFromIl2Cpp]
+    internal static void MarkRenderedHeadPose(
+        OpenXrHeadPose headPose)
+    {
+        lock (SyncRoot)
+        {
+            if (_backend is OpenXrNativeBackend nativeBackend)
+            {
+                nativeBackend.MarkRenderedHeadPose(
+                    headPose);
+            }
+        }
+    }
+
+    [HideFromIl2Cpp]
     internal static void LogState(
         ManualLogSource logger)
     {

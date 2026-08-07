@@ -881,6 +881,17 @@ static CursorConstants GetCursorConstants(
     int stereoEyeIndex)
 {
     CursorConstants constants = {};
+
+    if (stereoEyeIndex == -2)
+    {
+        constants.CursorX = 0.5f;
+        constants.CursorY = 0.5f;
+        constants.CursorVisible = 0.0f;
+        constants.InteractionVisible = 0.0f;
+        constants.InteractionX = 0.5f;
+        constants.InteractionY = 0.5f;
+        return constants;
+    }
     constants.CursorX = 0.5f;
     constants.CursorY = 0.5f;
     constants.CursorVisible = 0.0f;
@@ -1380,6 +1391,38 @@ MAVR_BlitStereoSourceTexture(
             destinationDxgiFormat,
             true,
             eyeIndex,
+            nativeHResult);
+
+    sourceTexture->Release();
+
+    return result;
+}
+
+extern "C" __declspec(dllexport) int __cdecl
+MAVR_BlitSourceTexture(
+    void* sourceTexturePointer,
+    void* destinationTexturePointer,
+    std::int64_t destinationDxgiFormat,
+    std::int32_t* nativeHResult)
+{
+    if (sourceTexturePointer == nullptr)
+    {
+        return 30;
+    }
+
+    auto* sourceTexture =
+        reinterpret_cast<ID3D11Texture2D*>(
+            sourceTexturePointer);
+
+    sourceTexture->AddRef();
+
+    const int result =
+        BlitTextureToDestination(
+            sourceTexture,
+            destinationTexturePointer,
+            destinationDxgiFormat,
+            true,
+            -2,
             nativeHResult);
 
     sourceTexture->Release();

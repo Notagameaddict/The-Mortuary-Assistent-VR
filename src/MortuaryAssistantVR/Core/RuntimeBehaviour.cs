@@ -138,7 +138,11 @@ public sealed class RuntimeBehaviour : MonoBehaviour
 
         if (!isGameplayScene)
         {
+            HeadTrackingPatch.ResetSceneState();
+
             InteractionPromptDetector.Reset();
+
+            ToolMenuUiProbe.Reset();
 
             StereoCameraRig.Reset();
 
@@ -150,6 +154,14 @@ public sealed class RuntimeBehaviour : MonoBehaviour
 
             return;
         }
+
+        // A newly loaded gameplay scene owns a new Player/CamHelper/XR rig.
+        // Never retain Transform wrappers from the previous scene.
+        HeadTrackingPatch.ResetSceneState();
+
+        InteractionPromptDetector.Reset();
+
+        ToolMenuUiProbe.Reset();
 
         if (ModConfig.EnableCameraProbe.Value)
         {

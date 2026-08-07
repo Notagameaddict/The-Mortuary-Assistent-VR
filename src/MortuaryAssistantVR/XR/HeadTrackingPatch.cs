@@ -17,6 +17,31 @@ internal static class HeadTrackingPatch
     private static long _lastAppliedSequence;
     private static int _appliedCount;
     private static bool _installed;
+    private static bool _lateUpdateInstalled;
+
+    internal static void ResetSceneState()
+    {
+        _headTransform =
+            null;
+
+        _headBaseLocalPosition =
+            Vector3.zero;
+
+        _openXrBasePosition =
+            Vector3.zero;
+
+        _positionBaselineCaptured =
+            false;
+
+        _lastAppliedSequence =
+            0;
+
+        _appliedCount =
+            0;
+
+        _logger?.LogInfo(
+            "[HeadTracking] Scene tracking state reset.");
+    }
 
     internal static void Install(
         ManualLogSource logger)
@@ -37,35 +62,6 @@ internal static class HeadTrackingPatch
         {
             logger.LogWarning(
                 "[HeadTracking] Type 'MFPP.Player' was not found.");
-
-            return;
-        }
-
-        var updateMethod =
-            playerType.GetMethod(
-                "Update",
-                BindingFlags.Instance |
-                BindingFlags.Public |
-                BindingFlags.NonPublic);
-
-        if (updateMethod is null)
-        {
-            logger.LogWarning(
-                "[HeadTracking] MFPP.Player.Update was not found.");
-
-            return;
-        }
-
-        var postfixMethod =
-            typeof(HeadTrackingPatch).GetMethod(
-                nameof(Postfix),
-                BindingFlags.Static |
-                BindingFlags.NonPublic);
-
-        if (postfixMethod is null)
-        {
-            logger.LogError(
-                "[HeadTracking] Postfix method was not found.");
 
             return;
         }
@@ -95,34 +91,19 @@ internal static class HeadTrackingPatch
                     harmonyType,
                     HarmonyId);
 
-            var harmonyPostfix =
-                Activator.CreateInstance(
-                    harmonyMethodType,
-                    postfixMethod);
+            if (harmony is null)
+            {
+                logger.LogError(
+                    "[HeadTracking] Harmony instance could not be created.");
+
+                return;
+            }
 
             var patchMethod =
-                harmonyType.GetMethods(
-                    BindingFlags.Instance |
-                    BindingFlags.Public)
-                .FirstOrDefault(
-                    method =>
-                    {
-                        if (method.Name != "Patch")
-                        {
-                            return false;
-                        }
+                ResolveHarmonyPatchMethod(
+                    harmonyType);
 
-                        var parameters =
-                            method.GetParameters();
-
-                        return parameters.Length >= 3 &&
-                               typeof(MethodBase).IsAssignableFrom(
-                                   parameters[0].ParameterType);
-                    });
-
-            if (harmony is null ||
-                harmonyPostfix is null ||
-                patchMethod is null)
+            if (patchMethod is null)
             {
                 logger.LogError(
                     "[HeadTracking] Harmony patch API could not be resolved.");
@@ -130,49 +111,161 @@ internal static class HeadTrackingPatch
                 return;
             }
 
-            var parameters =
-                patchMethod.GetParameters();
+            var updateMethod =
+                playerType.GetMethod(
+                    "Update",
+                    BindingFlags.Instance |
+                    BindingFlags.Public |
+                    BindingFlags.NonPublic);
 
-            var arguments =
-                new object?[parameters.Length];
-
-            arguments[0] =
-                updateMethod;
-
-            // Harmony.Patch(original, prefix, postfix, transpiler, finalizer, ...)
-            if (parameters.Length > 1)
+            if (updateMethod is not null)
             {
-                arguments[1] = null;
+                PatchPostfix(
+                    harmony,
+                    harmonyMethodType,
+                    patchMethod,
+                    updateMethod,
+                    nameof(UpdatePostfix));
+
+                logger.LogInfo(
+                    "[HeadTracking] Patched MFPP.Player.Update for " +
+                    "interaction/presentation maintenance.");
             }
 
-            if (parameters.Length > 2)
-            {
-                arguments[2] = harmonyPostfix;
-            }
+            var lateUpdateMethod =
+                playerType.GetMethod(
+                    "LateUpdate",
+                    BindingFlags.Instance |
+                    BindingFlags.Public |
+                    BindingFlags.NonPublic);
 
-            for (var index = 3;
-                 index < arguments.Length;
-                 index++)
+            if (lateUpdateMethod is not null)
             {
-                arguments[index] = null;
-            }
+                PatchPostfix(
+                    harmony,
+                    harmonyMethodType,
+                    patchMethod,
+                    lateUpdateMethod,
+                    nameof(LateUpdatePostfix));
 
-            patchMethod.Invoke(
-                harmony,
-                arguments);
+                _lateUpdateInstalled =
+                    true;
+
+                logger.LogInfo(
+                    "[HeadTracking] Patched MFPP.Player.LateUpdate for " +
+                    "late head-pose application.");
+            }
+            else if (updateMethod is not null)
+            {
+                logger.LogWarning(
+                    "[HeadTracking] MFPP.Player.LateUpdate was not found; " +
+                    "falling back to Update timing.");
+            }
+            else
+            {
+                logger.LogError(
+                    "[HeadTracking] Neither MFPP.Player.Update nor " +
+                    "LateUpdate was found.");
+
+                return;
+            }
 
             _installed =
                 true;
-
-            logger.LogInfo(
-                "[HeadTracking] Patched MFPP.Player.Update " +
-                "through the runtime Harmony assembly.");
         }
         catch (Exception exception)
         {
             logger.LogError(
                 $"[HeadTracking] Harmony patch failed: {exception}");
         }
+    }
+
+    private static MethodInfo? ResolveHarmonyPatchMethod(
+        Type harmonyType)
+    {
+        return harmonyType.GetMethods(
+                BindingFlags.Instance |
+                BindingFlags.Public)
+            .FirstOrDefault(
+                method =>
+                {
+                    if (method.Name != "Patch")
+                    {
+                        return false;
+                    }
+
+                    var parameters =
+                        method.GetParameters();
+
+                    return parameters.Length >= 3 &&
+                           typeof(MethodBase).IsAssignableFrom(
+                               parameters[0].ParameterType);
+                });
+    }
+
+    private static void PatchPostfix(
+        object harmony,
+        Type harmonyMethodType,
+        MethodInfo patchMethod,
+        MethodInfo targetMethod,
+        string postfixName)
+    {
+        var postfixMethod =
+            typeof(HeadTrackingPatch).GetMethod(
+                postfixName,
+                BindingFlags.Static |
+                BindingFlags.NonPublic);
+
+        if (postfixMethod is null)
+        {
+            throw new MissingMethodException(
+                nameof(HeadTrackingPatch),
+                postfixName);
+        }
+
+        var harmonyPostfix =
+            Activator.CreateInstance(
+                harmonyMethodType,
+                postfixMethod);
+
+        if (harmonyPostfix is null)
+        {
+            throw new InvalidOperationException(
+                $"Could not create HarmonyMethod for {postfixName}.");
+        }
+
+        var parameters =
+            patchMethod.GetParameters();
+
+        var arguments =
+            new object?[parameters.Length];
+
+        arguments[0] =
+            targetMethod;
+
+        if (parameters.Length > 1)
+        {
+            arguments[1] =
+                null;
+        }
+
+        if (parameters.Length > 2)
+        {
+            arguments[2] =
+                harmonyPostfix;
+        }
+
+        for (var index = 3;
+             index < arguments.Length;
+             index++)
+        {
+            arguments[index] =
+                null;
+        }
+
+        patchMethod.Invoke(
+            harmony,
+            arguments);
     }
 
     private static Type? FindLoadedType(
@@ -196,13 +289,30 @@ internal static class HeadTrackingPatch
         return null;
     }
 
-    private static void Postfix()
+    private static void UpdatePostfix()
     {
-        StereoCameraRig.UpdatePresentationMode();
-
         InteractionPromptDetector.Update(
             _logger);
 
+        ToolMenuUiProbe.Update(
+            _logger);
+
+        StereoCameraRig.UpdatePresentationMode();
+
+        // Fallback for game builds that do not expose LateUpdate.
+        if (!_lateUpdateInstalled)
+        {
+            ApplyLatestHeadPose();
+        }
+    }
+
+    private static void LateUpdatePostfix()
+    {
+        ApplyLatestHeadPose();
+    }
+
+    private static void ApplyLatestHeadPose()
+    {
         if (!XrBackendManager.TryGetLatestHeadPose(
                 out var pose))
         {
@@ -218,13 +328,13 @@ internal static class HeadTrackingPatch
         _lastAppliedSequence =
             pose.Sequence;
 
-        if (_headTransform is null)
+        if (_headTransform == null)
         {
             var headObject =
                 GameObject.Find(
                     "MortuaryAssistantVR_Head");
 
-            if (headObject is null)
+            if (headObject == null)
             {
                 return;
             }
@@ -290,6 +400,13 @@ internal static class HeadTrackingPatch
         StereoCameraRig.ApplyOpenXrProjection(
             pose);
 
+        // The eye RenderTextures rendered after this LateUpdate correspond
+        // to this exact OpenXR pose. Tag it so the compositor projection
+        // layer uses the matching pose rather than the newer pose located
+        // during Present.
+        XrBackendManager.MarkRenderedHeadPose(
+            pose);
+
         _appliedCount++;
 
         if (_appliedCount <= 5 ||
@@ -302,7 +419,7 @@ internal static class HeadTrackingPatch
                 _headTransform.localPosition;
 
             _logger?.LogInfo(
-                $"[HeadTracking] Applied pose {_appliedCount}: " +
+                $"[HeadTracking] Late pose {_appliedCount}: " +
                 $"sequence={pose.Sequence}, " +
                 $"euler=({euler.x:F1}, {euler.y:F1}, {euler.z:F1}), " +
                 $"localPosition=({localPosition.x:F3}, " +
